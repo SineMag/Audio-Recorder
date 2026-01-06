@@ -1,10 +1,9 @@
-import { Tabs } from 'expo-router';
-import React from 'react';
+import { Tabs } from "expo-router";
+import React from "react";
 
-import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
+import { Colors } from "@/constants/theme";
+import { useColorScheme } from "@/hooks/use-color-scheme";
+import { Ionicons } from "@expo/vector-icons";
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
@@ -12,15 +11,29 @@ export default function TabLayout() {
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
-        headerShown: true,
-        tabBarButton: HapticTab,
-      }}>
+        tabBarActiveTintColor: Colors[colorScheme ?? "light"].tint,
+        headerShown: false,
+        tabBarShowLabel: false,
+      }}
+    >
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Audio Recorder',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="mic.circle.fill" color={color} />,
+          headerShown: false,
+          title: "Record",
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="mic" size={22} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="play"
+        options={{
+          headerShown: false,
+          title: "Play",
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="play" size={22} color={color} />
+          ),
         }}
       />
     </Tabs>

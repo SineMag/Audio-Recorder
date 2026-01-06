@@ -2,6 +2,14 @@
 
 This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
 
+## Features
+
+- Clean single-screen recorder UI (Record/Stop)
+- Elapsed timer while recording
+- Play/Pause and Reset playback controls
+- Permission prompts with error messaging
+- Light/Dark theme friendly styling
+
 ## Get started
 
 1. Install dependencies
