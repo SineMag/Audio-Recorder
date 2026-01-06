@@ -1,3 +1,4 @@
+import { Colors } from "@/constants/theme";
 import Text from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
 import { StyleSheet } from "react-native";
@@ -18,7 +19,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "flex-start",
-    borderColor: "black",
+    borderColor: Colors.light.icon,
     borderWidth: 1,
     borderRadius: 8,
   },
