@@ -17,6 +17,8 @@ export default function HomeScreen() {
   const [error, setError] = useState<string | null>(null);
   const [blink, setBlink] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [pendingUri, setPendingUri] = useState<string | null>(null);
 
   const DOC_DIR = (FileSystem as any).documentDirectory as string | null;
   const BASE_DIR =
@@ -89,6 +91,16 @@ export default function HomeScreen() {
         playsInSilentModeIOS: true,
       });
 
+      // Reset playback and pending state
+      if (sound) {
+        try {
+          await sound.unloadAsync();
+        } catch {}
+        setSound(null);
+      }
+      setPendingUri(null);
+      setRecordingUri(null);
+
       const { recording } = await Audio.Recording.createAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
@@ -96,8 +108,29 @@ export default function HomeScreen() {
       setElapsed(0);
       setRecording(recording);
       setIsRecording(true);
+      setIsPaused(false);
     } catch (e) {
       setError("Failed to start recording");
+    }
+  }
+
+  async function pauseRecording() {
+    try {
+      if (!recording) return;
+      await (recording as any).pauseAsync?.();
+      setIsPaused(true);
+    } catch (e) {
+      setError("Failed to pause");
+    }
+  }
+
+  async function resumeRecording() {
+    try {
+      if (!recording) return;
+      await (recording as any).startAsync?.();
+      setIsPaused(false);
+    } catch (e) {
+      setError("Failed to resume");
     }
   }
 
@@ -109,23 +142,21 @@ export default function HomeScreen() {
       const uri = recording.getURI();
       setRecording(null);
       setIsRecording(false);
+      setIsPaused(false);
       if (!uri) {
         setError("No recording URI available");
         return;
       }
-      await ensureRecordingsDir();
-      const extMatch = uri.match(/\.([a-zA-Z0-9]+)(?:\?|$)/);
-      const ext = extMatch?.[1] ?? "m4a";
-      const dest = `${RECORDINGS_DIR}rec_${Date.now()}.${ext}`;
-      await FileSystem.moveAsync({ from: uri, to: dest });
-      setRecordingUri(dest);
+      // Keep as pending until user taps Save
+      setPendingUri(uri);
     } catch (e) {
       setError("Failed to stop recording");
     }
   }
 
   async function togglePlayback() {
-    if (!recordingUri) return;
+    const src = pendingUri ?? recordingUri;
+    if (!src) return;
     try {
       if (sound) {
         const status = await sound.getStatusAsync();
@@ -138,9 +169,7 @@ export default function HomeScreen() {
         setIsPlaying(true);
         return;
       }
-      const { sound: created } = await Audio.Sound.createAsync({
-        uri: recordingUri,
-      });
+      const { sound: created } = await Audio.Sound.createAsync({ uri: src });
       created.setOnPlaybackStatusUpdate((s: any) => {
         if (!s.isLoaded) return;
         if ("didJustFinish" in s && s.didJustFinish) setIsPlaying(false);
@@ -160,9 +189,25 @@ export default function HomeScreen() {
       setSound(null);
     }
     setRecordingUri(null);
+    setPendingUri(null);
     setElapsed(0);
     startTimeRef.current = null;
     setIsPlaying(false);
+  }
+
+  async function saveRecording() {
+    try {
+      if (!pendingUri) return;
+      await ensureRecordingsDir();
+      const extMatch = pendingUri.match(/\.([a-zA-Z0-9]+)(?:\?|$)/);
+      const ext = extMatch?.[1] ?? "m4a";
+      const dest = `${RECORDINGS_DIR}rec_${Date.now()}.${ext}`;
+      await FileSystem.moveAsync({ from: pendingUri, to: dest });
+      setRecordingUri(dest);
+      setPendingUri(null);
+    } catch (e) {
+      setError("Failed to save recording");
+    }
   }
 
   function formatTime(totalSeconds: number) {
@@ -184,53 +229,91 @@ export default function HomeScreen() {
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
-        <View style={styles.recordWrap}>
-          {isRecording ? (
-            <View style={[styles.pulse, { opacity: blink ? 1 : 0.3 }]} />
-          ) : null}
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel={
-              isRecording ? "Stop recording" : "Start recording"
-            }
-            onPress={isRecording ? stopRecording : startRecording}
-            style={[
-              styles.recordButton,
-              isRecording && styles.recordButtonActive,
-            ]}
-          >
-            <Ionicons
-              name={isRecording ? "stop" : "mic"}
-              size={36}
-              color="#ffffff"
-            />
-          </TouchableOpacity>
+        <View style={styles.primaryRow}>
+          {!isRecording && (
+            <TouchableOpacity
+              onPress={startRecording}
+              style={styles.primaryBtn}
+            >
+              <View style={styles.iconWithLabel}>
+                <Ionicons name="mic" size={36} color="#ffffff" />
+                <Text style={styles.iconLabel}>Record</Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
+          {isRecording && (
+            <>
+              <TouchableOpacity
+                onPress={stopRecording}
+                style={[styles.primaryBtn, styles.stopBtn]}
+              >
+                <View style={styles.iconWithLabel}>
+                  <Ionicons name="stop" size={36} color="#ffffff" />
+                  <Text style={styles.iconLabel}>Stop</Text>
+                </View>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={pauseRecording}
+                style={styles.primaryBtn}
+              >
+                <View style={styles.iconWithLabel}>
+                  <Ionicons name="pause" size={36} color="#ffffff" />
+                  <Text style={styles.iconLabel}>Pause</Text>
+                </View>
+              </TouchableOpacity>
+            </>
+          )}
+
+          {!isRecording && elapsed > 0 && (
+            <TouchableOpacity
+              onPress={resumeRecording}
+              style={styles.primaryBtn}
+            >
+              <View style={styles.iconWithLabel}>
+                <Ionicons name="play" size={36} color="#ffffff" />
+                <Text style={styles.iconLabel}>Continue</Text>
+              </View>
+            </TouchableOpacity>
+          )}
         </View>
+
+        {isRecording ? (
+          <View style={styles.recordWrap}>
+            <View style={[styles.pulse, { opacity: blink ? 1 : 0.3 }]} />
+          </View>
+        ) : null}
 
         <View style={styles.controls}>
           <TouchableOpacity
-            disabled={!recordingUri}
+            disabled={!pendingUri && !recordingUri}
             onPress={togglePlayback}
             style={[
               styles.actionButton,
-              !recordingUri && styles.actionButtonDisabled,
+              !pendingUri && !recordingUri && styles.actionButtonDisabled,
             ]}
           >
-            <Ionicons
-              name={isPlaying ? "pause" : "play"}
-              size={20}
-              color="#ffffff"
-            />
+            <View style={styles.iconWithLabel}>
+              <Ionicons
+                name={isPlaying ? "pause" : "play"}
+                size={20}
+                color="#ffffff"
+              />
+              <Text style={styles.iconLabel}>Play</Text>
+            </View>
           </TouchableOpacity>
           <TouchableOpacity
-            disabled={!recordingUri}
-            onPress={resetRecording}
+            disabled={!pendingUri}
+            onPress={saveRecording}
             style={[
               styles.actionButton,
-              !recordingUri && styles.actionButtonDisabled,
+              !pendingUri && styles.actionButtonDisabled,
             ]}
           >
-            <Ionicons name="refresh" size={20} color="#ffffff" />
+            <View style={styles.iconWithLabel}>
+              <Ionicons name="save" size={20} color="#ffffff" />
+              <Text style={styles.iconLabel}>Save</Text>
+            </View>
           </TouchableOpacity>
         </View>
       </View>
