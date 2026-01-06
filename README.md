@@ -1,58 +1,69 @@
-# Welcome to your Expo app 👋
+<img src="https://socialify.git.ci/SineMag/Audio-Recorder/image?language=1&owner=1&name=1&stargazers=1&theme=Light" alt="Audio-Recorder" width="640" height="320" />
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+# Audio Recorder (Expo)
 
-## Features
+Voice recorder with local, per-device storage (no cross-device sharing), playback, rename, delete, search, and per-file metadata. Recording is disabled on web (Expo limitation), but the web build can showcase the UI/list.
 
-- Clean single-screen recorder UI (Record/Stop)
-- Elapsed timer while recording
-- Play/Pause and Reset playback controls
-- Permission prompts with error messaging
-- Light/Dark theme friendly styling
+## Stack
 
-## Get started
+- Expo 54 (Router)
+- React Native 0.81
+- Expo AV / Audio
+- Expo File System (legacy API for compatibility with Expo Go)
 
-1. Install dependencies
+## Prerequisites
 
-   ```bash
-   npm install
-   ```
+- Node 18+ and npm
+- Expo CLI (`npm i -g expo` optional; `npx expo` works without global install)
+- Android emulator or iOS simulator, or a real device with Expo Go
 
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Install & run (development)
 
 ```bash
-npm run reset-project
+npm install
+npx expo start
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Then in the Metro UI / terminal, choose:
 
-## Learn more
+- `i` to open iOS simulator (macOS)
+- `a` to open Android emulator
+- Scan the QR with Expo Go on device
 
-To learn more about developing your project with Expo, look at the following resources:
+## Web (UI demo only; recording not supported on web)
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+- Start: `npm run web`
+- Export static site: `npm run export:web` (outputs to `dist/`)
 
-## Join the community
+## Deploy to Render (static web demo)
 
-Join our community of developers creating universal apps.
+- Build command: `npm install && npm run export:web`
+- Publish directory: `dist`
+- Note: Recording is not available on web; this is for UI/list demo only.
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## Permissions / storage
+
+- Microphone permission is requested at runtime (mobile only).
+- Recordings are stored per-device in the sandboxed document/cache directory; other devices cannot see your files.
+
+## Key features
+
+- Record / pause / resume / stop with elapsed timer.
+- Save to local storage; per-device isolation.
+- Playback with position/duration display, play/pause toggle.
+- Rename (sanitized), delete, and search recordings.
+- Show size and modification date/time; newest-first listing.
+
+## Troubleshooting
+
+- If you see FS deprecation warnings, we intentionally import `expo-file-system/legacy` for compatibility with Expo Go.
+- If you see “Failed to save recording”, check Metro console for the logged error: `Failed to save recording ...` and ensure you’re on device/emulator (not web) and have granted mic permission.
+
+## Scripts
+
+- `npm start` / `npx expo start` — start Metro
+- `npm run android` — run on Android emulator/device
+- `npm run ios` — run on iOS simulator (macOS)
+- `npm run web` — start web dev server (UI only)
+- `npm run export:web` — export static web build to `dist/`
+- `npm run lint` — lint
