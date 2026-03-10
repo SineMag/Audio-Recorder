@@ -17,6 +17,13 @@ Voice recorder with local, per-device storage (no cross-device sharing), playbac
 - Expo CLI (`npm i -g expo` optional; `npx expo` works without global install)
 - Android emulator or iOS simulator, or a real device with Expo Go
 
+## Clone
+
+```bash
+git clone https://github.com/SineMag/Audio-Recorder.git
+cd Audio-Recorder
+```
+
 ## Install & run (development)
 
 ```bash
@@ -29,6 +36,25 @@ Then in the Metro UI / terminal, choose:
 - `i` to open iOS simulator (macOS)
 - `a` to open Android emulator
 - Scan the QR with Expo Go on device
+
+## Project structure
+
+```
+Audio-Recorder/
+  app/
+    (tabs)/
+      index.tsx        # Record screen (record, pause, save, playback preview)
+      play.tsx         # List, search, rename, delete, play recordings
+      _layout.tsx      # Tab layout
+    _layout.tsx        # Root navigation
+  assets/              # App icons and images
+  components/          # UI components
+  constants/           # Theme/constants
+  hooks/               # Custom hooks
+  app.json             # Expo config (permissions)
+  package.json         # Scripts and dependencies
+  README.md
+```
 
 ## Web (UI demo only; recording not supported on web)
 
@@ -57,13 +83,13 @@ Then in the Metro UI / terminal, choose:
 ## Troubleshooting
 
 - If you see FS deprecation warnings, we intentionally import `expo-file-system/legacy` for compatibility with Expo Go.
-- If you see “Failed to save recording”, check Metro console for the logged error: `Failed to save recording ...` and ensure you’re on device/emulator (not web) and have granted mic permission.
+- If you see "Failed to save recording", check Metro console for the logged error and ensure you're on device/emulator (not web) and have granted mic permission.
 
 ## Scripts
 
-- `npm start` / `npx expo start` — start Metro
-- `npm run android` — run on Android emulator/device
-- `npm run ios` — run on iOS simulator (macOS)
-- `npm run web` — start web dev server (UI only)
-- `npm run export:web` — export static web build to `dist/`
-- `npm run lint` — lint
+- `npm start` / `npx expo start` - start Metro
+- `npm run android` - run on Android emulator/device
+- `npm run ios` - run on iOS simulator (macOS)
+- `npm run web` - start web dev server (UI only)
+- `npm run export:web` - export static web build to `dist/`
+- `npm run lint` - lint

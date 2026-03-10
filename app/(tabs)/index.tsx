@@ -286,7 +286,7 @@ export default function HomeScreen() {
       <View style={styles.card}>
         <Text style={styles.timer}>
           {isRecording
-            ? `Recording · ${formatTime(elapsed)}`
+            ? `Recording - ${formatTime(elapsed)}`
             : elapsed > 0
             ? formatTime(elapsed)
             : ""}
@@ -301,7 +301,7 @@ export default function HomeScreen() {
               style={styles.primaryBtn}
             >
               <View style={styles.iconWithLabel}>
-                <Ionicons name="mic" size={36} color="#ffffff" />
+                <Ionicons name="mic" size={36} color="#0b0b0b" />
                 <Text style={styles.iconLabel}>Record</Text>
               </View>
             </TouchableOpacity>
@@ -314,7 +314,7 @@ export default function HomeScreen() {
                 style={[styles.primaryBtn, styles.stopBtn]}
               >
                 <View style={styles.iconWithLabel}>
-                  <Ionicons name="stop" size={36} color="#ffffff" />
+                  <Ionicons name="stop" size={36} color="#0b0b0b" />
                   <Text style={styles.iconLabel}>Stop</Text>
                 </View>
               </TouchableOpacity>
@@ -324,7 +324,7 @@ export default function HomeScreen() {
                   style={styles.primaryBtn}
                 >
                   <View style={styles.iconWithLabel}>
-                    <Ionicons name="play-forward" size={36} color="#ffffff" />
+                    <Ionicons name="play-forward" size={36} color="#0b0b0b" />
                     <Text style={styles.iconLabel}>Continue</Text>
                   </View>
                 </TouchableOpacity>
@@ -334,7 +334,7 @@ export default function HomeScreen() {
                   style={styles.primaryBtn}
                 >
                   <View style={styles.iconWithLabel}>
-                    <Ionicons name="pause" size={36} color="#ffffff" />
+                    <Ionicons name="pause" size={36} color="#0b0b0b" />
                     <Text style={styles.iconLabel}>Pause</Text>
                   </View>
                 </TouchableOpacity>
@@ -365,20 +365,20 @@ export default function HomeScreen() {
           <TouchableOpacity
             disabled={!pendingUri && !recordingUri}
             onPress={togglePlayback}
-            style={[
-              styles.actionButton,
-              !pendingUri && !recordingUri && styles.actionButtonDisabled,
-            ]}
-          >
-            <View style={styles.iconWithLabel}>
-              <Ionicons
-                name={isPlaying ? "pause" : "play"}
-                size={20}
-                color="#ffffff"
-              />
-              <Text style={styles.iconLabel}>Play</Text>
-            </View>
-          </TouchableOpacity>
+              style={[
+                styles.actionButton,
+                !pendingUri && !recordingUri && styles.actionButtonDisabled,
+              ]}
+            >
+              <View style={styles.iconWithLabel}>
+                <Ionicons
+                  name={isPlaying ? "pause" : "play"}
+                  size={20}
+                  color="#0b0b0b"
+                />
+                <Text style={styles.iconLabel}>Play</Text>
+              </View>
+            </TouchableOpacity>
           <TouchableOpacity
             disabled={!pendingUri}
             onPress={saveRecording}
@@ -388,7 +388,7 @@ export default function HomeScreen() {
             ]}
           >
             <View style={styles.iconWithLabel}>
-              <Ionicons name="save-outline" size={20} color="#ffffff" />
+              <Ionicons name="save-outline" size={20} color="#0b0b0b" />
               <Text style={styles.iconLabel}>Save</Text>
             </View>
           </TouchableOpacity>
@@ -415,7 +415,11 @@ const styles = StyleSheet.create({
     padding: 24,
     alignItems: "stretch",
     gap: 20,
-    backgroundColor: "rgba(15,23,42,0.06)",
+    backgroundColor: "#111111",
+    borderWidth: 1,
+    borderColor: "#1f2937",
+    borderTopWidth: 3,
+    borderTopColor: "#ef4444",
   },
   primaryRow: {
     flexDirection: "row",
@@ -447,7 +451,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   iconLabel: {
-    color: "#ffffff",
+    color: "#0b0b0b",
     fontWeight: "600",
   },
   recordWrap: {
@@ -488,7 +492,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 8,
-    backgroundColor: "#111827",
+    backgroundColor: Colors.light.tint,
   },
   actionButtonDisabled: {
     opacity: 0.4,
@@ -504,3 +508,4 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
 });
+

@@ -9,6 +9,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   FlatList,
+  Linking,
   Platform,
   StyleSheet,
   TextInput,
@@ -20,6 +21,9 @@ const DOC_DIR = (FileSystem as any).documentDirectory as string | null;
 const CACHE_DIR = (FileSystem as any).cacheDirectory as string | null;
 const BASE_DIR = DOC_DIR ?? CACHE_DIR ?? null;
 const RECORDINGS_DIR = BASE_DIR ? `${BASE_DIR}recordings/` : null;
+const FEEDBACK_URL =
+  "https://docs.google.com/forms/d/e/1FAIpQLScs_5eJZJg5fDDAngStIVKTi7ZY4sUX7VNERTtzOlJNh5Hmkw/viewform";
+const SUPPORT_EMAIL = "support@audiorecorder.app";
 
 type RecItem = {
   name: string;
@@ -129,6 +133,22 @@ export default function PlayScreen() {
       loadList();
       return () => {};
     }, [loadList])
+  );
+
+  const openLink = useCallback(
+    async (url: string) => {
+      try {
+        const can = await Linking.canOpenURL(url);
+        if (!can) {
+          setError("Unable to open link on this device");
+          return;
+        }
+        await Linking.openURL(url);
+      } catch (e) {
+        setError("Failed to open link");
+      }
+    },
+    [setError]
   );
 
   const formatTime = (totalMillis: number) => {
@@ -300,7 +320,7 @@ export default function PlayScreen() {
               onPress={() => startRename(item)}
               style={[styles.iconBtn, styles.renameBtn]}
             >
-              <Ionicons name={"create"} size={20} color={"#ffffff"} />
+              <Ionicons name={"create"} size={20} color={"#0b0b0b"} />
             </TouchableOpacity>
             <TouchableOpacity
               onPress={() => handlePlay(item)}
@@ -309,14 +329,14 @@ export default function PlayScreen() {
               <Ionicons
                 name={isCurrent && isPlaying ? "pause" : "play"}
                 size={20}
-                color={"#ffffff"}
+                color={"#0b0b0b"}
               />
             </TouchableOpacity>
             <TouchableOpacity
               onPress={() => handleDelete(item)}
               style={[styles.iconBtn, styles.deleteBtn]}
             >
-              <Ionicons name={"trash"} size={20} color={"#ffffff"} />
+              <Ionicons name={"trash"} size={20} color={"#0b0b0b"} />
             </TouchableOpacity>
           </View>
         </View>
@@ -336,6 +356,9 @@ export default function PlayScreen() {
   const filteredItems = items.filter((it) =>
     it.name.toLowerCase().includes(search.trim().toLowerCase())
   );
+  const supportMailto = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(
+    "Audio Recorder Support"
+  )}`;
 
   if (isWeb) {
     return (
@@ -374,10 +397,10 @@ export default function PlayScreen() {
               onPress={cancelRename}
               style={[styles.iconBtn, styles.cancelBtn]}
             >
-              <Ionicons name="close" size={20} color="#ffffff" />
+              <Ionicons name="close" size={20} color="#0b0b0b" />
             </TouchableOpacity>
             <TouchableOpacity onPress={submitRename} style={styles.iconBtn}>
-              <Ionicons name="checkmark" size={20} color="#ffffff" />
+              <Ionicons name="checkmark" size={20} color="#0b0b0b" />
             </TouchableOpacity>
           </View>
         </View>
@@ -388,8 +411,34 @@ export default function PlayScreen() {
         renderItem={renderItem}
         onRefresh={loadList}
         refreshing={loading}
+        ListFooterComponent={
+          <View style={styles.supportCard}>
+            <Text style={styles.supportTitle}>Feedback & Support</Text>
+            <Text style={styles.supportText}>
+              Share feedback or get help with recordings and playback.
+            </Text>
+            <View style={styles.supportRow}>
+              <TouchableOpacity
+                onPress={() => openLink(FEEDBACK_URL)}
+                style={styles.supportButton}
+              >
+                <Text style={styles.supportButtonText}>Submit Feedback</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => openLink(supportMailto)}
+                style={[styles.supportButton, styles.supportOutline]}
+              >
+                <Text style={styles.supportButtonTextOutline}>
+                  Contact Support
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        }
         contentContainerStyle={
-          filteredItems.length === 0 ? styles.emptyWrap : undefined
+          filteredItems.length === 0
+            ? [styles.emptyWrap, styles.listPadding]
+            : styles.listPadding
         }
         ListEmptyComponent={<Text>No recordings yet</Text>}
       />
@@ -412,7 +461,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: Colors.light.icon,
+    borderColor: "#1f2937",
+    borderLeftWidth: 3,
+    borderLeftColor: "#ef4444",
+    backgroundColor: "#111111",
   },
   rowInfo: {
     flexDirection: "column",
@@ -433,7 +485,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   iconBtn: {
-    backgroundColor: "#111827",
+    backgroundColor: Colors.light.tint,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 8,
@@ -442,7 +494,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#ef4444",
   },
   renameBtn: {
-    backgroundColor: "#2563eb",
+    backgroundColor: Colors.light.tint,
   },
   cancelBtn: {
     backgroundColor: "#9ca3af",
@@ -455,6 +507,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
+  listPadding: {
+    paddingBottom: 24,
+  },
   searchRow: {
     flexDirection: "row",
     marginBottom: 8,
@@ -462,12 +517,12 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     borderWidth: 1,
-    borderColor: "#e5e7eb",
+    borderColor: Colors.light.tint,
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    backgroundColor: "#f9fafb",
-    color: "#111827",
+    backgroundColor: "#0b0b0b",
+    color: "#f5f5f5",
   },
   renameBar: {
     flexDirection: "row",
@@ -478,15 +533,57 @@ const styles = StyleSheet.create({
   renameInput: {
     flex: 1,
     borderWidth: 1,
-    borderColor: "#e5e7eb",
+    borderColor: Colors.light.tint,
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    backgroundColor: "#f9fafb",
-    color: "#111827",
+    backgroundColor: "#0b0b0b",
+    color: "#f5f5f5",
   },
   renameActions: {
     flexDirection: "row",
     gap: 8,
+  },
+  supportCard: {
+    marginTop: 20,
+    padding: 16,
+    borderRadius: 12,
+    backgroundColor: "#111111",
+    borderWidth: 1,
+    borderColor: "#1f2937",
+    borderLeftWidth: 3,
+    borderLeftColor: "#ef4444",
+  },
+  supportTitle: {
+    fontWeight: "700",
+    marginBottom: 6,
+  },
+  supportText: {
+    opacity: 0.7,
+    marginBottom: 12,
+  },
+  supportRow: {
+    flexDirection: "row",
+    gap: 10,
+    flexWrap: "wrap",
+  },
+  supportButton: {
+    backgroundColor: Colors.light.tint,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  supportOutline: {
+    backgroundColor: "#0b0b0b",
+    borderWidth: 1,
+    borderColor: Colors.light.tint,
+  },
+  supportButtonText: {
+    color: "#0b0b0b",
+    fontWeight: "600",
+  },
+  supportButtonTextOutline: {
+    color: Colors.light.tint,
+    fontWeight: "600",
   },
 });
