@@ -1,177 +1,146 @@
 import Text from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
-import { Colors } from "@/constants/theme";
+import {
+  ensureRecordingsDir,
+  extractExtension,
+  formatFileSize,
+  formatMillis,
+  formatModifiedDate,
+  normalizeTimestamp,
+  RECORDINGS_DIR,
+  RecordingItem,
+  sanitizeRecordingName,
+} from "@/constants/recordings";
+import { Colors, Fonts, Palette } from "@/constants/theme";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { Audio } from "expo-av";
+// eslint-disable-next-line import/no-unresolved
 import * as FileSystem from "expo-file-system/legacy";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   FlatList,
-  Linking,
   Platform,
+  Pressable,
   StyleSheet,
   TextInput,
-  TouchableOpacity,
+  useWindowDimensions,
   View,
 } from "react-native";
 
-const DOC_DIR = (FileSystem as any).documentDirectory as string | null;
-const CACHE_DIR = (FileSystem as any).cacheDirectory as string | null;
-const BASE_DIR = DOC_DIR ?? CACHE_DIR ?? null;
-const RECORDINGS_DIR = BASE_DIR ? `${BASE_DIR}recordings/` : null;
-const FEEDBACK_URL =
-  "https://docs.google.com/forms/d/e/1FAIpQLScs_5eJZJg5fDDAngStIVKTi7ZY4sUX7VNERTtzOlJNh5Hmkw/viewform";
-const SUPPORT_EMAIL = "support@audiorecorder.app";
-
-type RecItem = {
-  name: string;
-  uri: string;
-  size?: number;
-  modified?: number;
-};
-
-const sanitizeFileName = (input: string) => {
-  const safe = input
-    .replace(/[/\\]/g, " ")
-    .replace(/\s+/g, " ")
-    .replace(/[^a-zA-Z0-9 _.-]/g, "")
-    .trim()
-    .replace(/^\.+/, "");
-  return safe;
-};
-
-function useRecordingsList(isWeb: boolean, setError: (val: string | null) => void) {
-  const [items, setItems] = useState<RecItem[]>([]);
+function useRecordingsList(
+  isWeb: boolean,
+  setError: (value: string | null) => void
+) {
+  const [items, setItems] = useState<RecordingItem[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const ensureDir = useCallback(async () => {
-    if (!RECORDINGS_DIR) {
-      throw new Error("No base directory available for recordings");
-    }
-    try {
-      const info = await FileSystem.getInfoAsync(RECORDINGS_DIR);
-      if (!info.exists) {
-        await FileSystem.makeDirectoryAsync(RECORDINGS_DIR, {
-          intermediates: true,
-        });
-      }
-    } catch (e) {
-      setError("Unable to ensure recordings directory");
-    }
-  }, [setError]);
-
   const loadList = useCallback(async () => {
-    if (isWeb) return; // not supported
+    if (isWeb || !RECORDINGS_DIR) {
+      setItems([]);
+      return;
+    }
+
     setLoading(true);
+    setError(null);
+
     try {
-      await ensureDir();
-      if (!RECORDINGS_DIR) {
-        throw new Error("No base directory available for recordings");
-      }
+      await ensureRecordingsDir();
       const names = await FileSystem.readDirectoryAsync(RECORDINGS_DIR);
       const infos = await Promise.all(
-        names.map((name) => FileSystem.getInfoAsync(RECORDINGS_DIR + name))
+        names.map((name) => FileSystem.getInfoAsync(`${RECORDINGS_DIR}${name}`))
       );
-      const recs: RecItem[] = names.map((name, idx) => {
-        const info = infos[idx];
-        let size: number | undefined;
-        let modified: number | undefined;
-        if (info.exists) {
-          if ("size" in (info as any) && typeof (info as any).size === "number") {
-            size = (info as any).size;
-          }
-          if (
-            "modificationTime" in (info as any) &&
-            typeof (info as any).modificationTime === "number"
-          ) {
-            modified = (info as any).modificationTime;
-          }
-        }
-        return { name, uri: RECORDINGS_DIR + name, size, modified };
+
+      const recordings = names.map((name, index) => {
+        const info = infos[index] as any;
+        return {
+          name,
+          uri: `${RECORDINGS_DIR}${name}`,
+          size: typeof info?.size === "number" ? info.size : undefined,
+          modified: normalizeTimestamp(info?.modificationTime),
+        };
       });
-      recs.sort((a, b) => (b.modified ?? 0) - (a.modified ?? 0));
-      setItems(recs);
-    } catch (e) {
-      setError("Failed to load recordings");
+
+      recordings.sort((a, b) => (b.modified ?? 0) - (a.modified ?? 0));
+      setItems(recordings);
+    } catch {
+      setError("Failed to load recordings.");
     } finally {
       setLoading(false);
     }
-  }, [ensureDir, isWeb, setError]);
+  }, [isWeb, setError]);
 
   return { items, loading, loadList };
 }
 
 export default function PlayScreen() {
+  const { width } = useWindowDimensions();
+  const isWide = width >= 960;
+  const isTablet = width >= 700;
+  const isWeb = Platform.OS === "web";
   const soundRef = useRef<Audio.Sound | null>(null);
+
   const [currentUri, setCurrentUri] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [playbackPosition, setPlaybackPosition] = useState(0);
   const [playbackDuration, setPlaybackDuration] = useState<number | null>(null);
   const [search, setSearch] = useState("");
   const [renameUri, setRenameUri] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
-
-  const isWeb = Platform.OS === "web";
+  const [error, setError] = useState<string | null>(null);
 
   const { items, loading, loadList } = useRecordingsList(isWeb, setError);
+
+  const stopAndUnloadCurrent = useCallback(async () => {
+    if (!soundRef.current) return;
+
+    try {
+      const status = await soundRef.current.getStatusAsync();
+      if (status.isLoaded && status.isPlaying) {
+        await soundRef.current.stopAsync();
+      }
+    } catch {}
+
+    try {
+      await soundRef.current.unloadAsync();
+    } catch {}
+
+    soundRef.current = null;
+    setIsPlaying(false);
+    setPlaybackPosition(0);
+    setPlaybackDuration(null);
+  }, []);
 
   useEffect(() => {
     loadList();
     return () => {
-      if (soundRef.current) {
-        soundRef.current.unloadAsync();
-        soundRef.current = null;
-      }
+      stopAndUnloadCurrent();
     };
-  }, [loadList]);
+  }, [loadList, stopAndUnloadCurrent]);
 
   useFocusEffect(
     React.useCallback(() => {
       loadList();
-      return () => {};
-    }, [loadList])
+      return () => {
+        stopAndUnloadCurrent();
+      };
+    }, [loadList, stopAndUnloadCurrent])
   );
 
-  const openLink = useCallback(
-    async (url: string) => {
-      try {
-        const can = await Linking.canOpenURL(url);
-        if (!can) {
-          setError("Unable to open link on this device");
-          return;
-        }
-        await Linking.openURL(url);
-      } catch (e) {
-        setError("Failed to open link");
-      }
-    },
-    [setError]
-  );
-
-  const formatTime = (totalMillis: number) => {
-    const totalSeconds = Math.floor(totalMillis / 1000);
-    const mm = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
-    const ss = String(totalSeconds % 60).padStart(2, "0");
-    return `${mm}:${ss}`;
-  };
-
-  const formatDate = (timestamp?: number) => {
-    if (!timestamp) return "";
-    const d = new Date(timestamp);
-    const date = d.toLocaleDateString();
-    const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    return `${date} ${time}`;
-  };
+  const filteredItems = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return items;
+    return items.filter((item) => item.name.toLowerCase().includes(query));
+  }, [items, search]);
 
   const handlePlay = useCallback(
-    async (item: RecItem) => {
+    async (item: RecordingItem) => {
       if (isWeb) return;
+
       setError(null);
+
       try {
-        // toggle if same track loaded
         if (currentUri === item.uri && soundRef.current) {
           const status = await soundRef.current.getStatusAsync();
           if (status.isLoaded && status.isPlaying) {
@@ -184,76 +153,78 @@ export default function PlayScreen() {
           return;
         }
 
-        // new track
-        if (soundRef.current) {
-          await soundRef.current.unloadAsync();
-          soundRef.current = null;
-        }
+        await stopAndUnloadCurrent();
+
         const { sound } = await Audio.Sound.createAsync({ uri: item.uri });
-        sound.setOnPlaybackStatusUpdate((s: any) => {
-          if (!s.isLoaded) return;
-          if ("didJustFinish" in s && s.didJustFinish) {
+        sound.setOnPlaybackStatusUpdate((status: any) => {
+          if (!status.isLoaded) return;
+
+          if ("didJustFinish" in status && status.didJustFinish) {
             setIsPlaying(false);
             setPlaybackPosition(0);
           } else {
-            setIsPlaying(!!s.isPlaying);
+            setIsPlaying(!!status.isPlaying);
           }
-          if ("positionMillis" in s && typeof s.positionMillis === "number") {
-            setPlaybackPosition(s.positionMillis);
+
+          if ("positionMillis" in status && typeof status.positionMillis === "number") {
+            setPlaybackPosition(status.positionMillis);
           }
-          if ("durationMillis" in s && typeof s.durationMillis === "number") {
-            setPlaybackDuration(s.durationMillis);
+
+          if ("durationMillis" in status && typeof status.durationMillis === "number") {
+            setPlaybackDuration(status.durationMillis);
           }
         });
+
         soundRef.current = sound;
         setCurrentUri(item.uri);
         setPlaybackPosition(0);
         setPlaybackDuration(null);
         await sound.playAsync();
         setIsPlaying(true);
-      } catch (e) {
-        setError("Playback error");
+      } catch {
+        setError("Playback failed for this recording.");
       }
     },
-    [currentUri, isWeb]
+    [currentUri, isWeb, stopAndUnloadCurrent]
   );
 
   const handleDelete = useCallback(
-    (item: RecItem) => {
+    (item: RecordingItem) => {
       if (isWeb) return;
-      Alert.alert(
-        "Delete recording",
-        "Are you sure you want to delete this recording?",
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Delete",
-            style: "destructive",
-            onPress: async () => {
-              try {
-                if (currentUri === item.uri && soundRef.current) {
-                  await soundRef.current.unloadAsync();
-                  soundRef.current = null;
-                  setCurrentUri(null);
-                  setIsPlaying(false);
-                }
-                await FileSystem.deleteAsync(item.uri, { idempotent: true });
-                loadList();
-              } catch (e) {
-                setError("Failed to delete");
+
+      Alert.alert("Delete recording", `Delete ${item.name}?`, [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              if (currentUri === item.uri) {
+                await stopAndUnloadCurrent();
+                setCurrentUri(null);
               }
-            },
+
+              await FileSystem.deleteAsync(item.uri, { idempotent: true });
+
+              if (renameUri === item.uri) {
+                setRenameUri(null);
+                setRenameValue("");
+              }
+
+              await loadList();
+            } catch {
+              setError("Failed to delete that recording.");
+            }
           },
-        ]
-      );
+        },
+      ]);
     },
-    [currentUri, isWeb, loadList]
+    [currentUri, isWeb, loadList, renameUri, stopAndUnloadCurrent]
   );
 
-  const startRename = useCallback((item: RecItem) => {
-    const base = item.name.replace(/\.[^.]+$/, "");
+  const startRename = useCallback((item: RecordingItem) => {
     setRenameUri(item.uri);
-    setRenameValue(base);
+    setRenameValue(item.name.replace(/\.[^.]+$/, ""));
     setError(null);
   }, []);
 
@@ -264,326 +235,474 @@ export default function PlayScreen() {
 
   const submitRename = useCallback(async () => {
     if (!renameUri) return;
-    const trimmed = renameValue.trim();
-    const safe = sanitizeFileName(trimmed);
-    if (!safe) {
-      setError("Name must include letters or numbers");
+
+    const safeName = sanitizeRecordingName(renameValue.trim());
+    if (!safeName) {
+      setError("Name must include letters or numbers.");
       return;
     }
+
     try {
       setError(null);
-      const extMatch = renameUri.match(/\.([^.]+)(?:\?|$)/);
-      const ext = extMatch?.[1] ?? "m4a";
-      const baseDir = renameUri.substring(0, renameUri.lastIndexOf("/") + 1);
-      const dest = `${baseDir}${safe}.${ext}`;
-      if (dest === renameUri) {
+
+      const extension = extractExtension(renameUri);
+      const baseDir = renameUri.slice(0, renameUri.lastIndexOf("/") + 1);
+      const destination = `${baseDir}${safeName}.${extension}`;
+
+      if (destination === renameUri) {
         cancelRename();
         return;
       }
-      await FileSystem.moveAsync({ from: renameUri, to: dest });
-      cancelRename();
-      loadList();
-    } catch (e) {
-      setError("Failed to rename");
-    }
-  }, [renameUri, renameValue, cancelRename, loadList]);
 
-  const renderItem = useCallback(
-    ({ item }: { item: RecItem }) => {
+      const existing = await FileSystem.getInfoAsync(destination);
+      if (existing.exists) {
+        setError("A recording with that name already exists.");
+        return;
+      }
+
+      await FileSystem.moveAsync({ from: renameUri, to: destination });
+
+      if (currentUri === renameUri) {
+        setCurrentUri(destination);
+      }
+
+      cancelRename();
+      await loadList();
+    } catch {
+      setError("Failed to rename that recording.");
+    }
+  }, [cancelRename, currentUri, loadList, renameUri, renameValue]);
+
+  const summaryText = useMemo(() => {
+    if (items.length === 0) return "No local recordings yet";
+    if (!search.trim()) {
+      return `${items.length} recording${items.length === 1 ? "" : "s"} stored`;
+    }
+    return `${filteredItems.length} match${filteredItems.length === 1 ? "" : "es"} for "${search.trim()}"`;
+  }, [filteredItems.length, items.length, search]);
+
+  const renderRecording = useCallback(
+    ({ item }: { item: RecordingItem }) => {
       const isCurrent = currentUri === item.uri;
-      const hasProgress =
-        isCurrent && playbackDuration !== null && playbackDuration > 0;
-      const durationText = hasProgress
-        ? formatTime(playbackDuration ?? 0)
-        : "";
+      const isRenaming = renameUri === item.uri;
+
       return (
-        <View style={styles.row}>
-          <View style={styles.rowInfo}>
-            <Text style={styles.name}>{item.name}</Text>
-            {item.size ? (
-              <Text style={styles.meta}>
-                {(item.size / 1024).toFixed(1)} KB
+        <View style={[styles.recordingCard, isWide && styles.recordingCardWide]}>
+          <View style={styles.recordingHeader}>
+            <View style={styles.recordingCopy}>
+              <Text style={styles.recordingName}>{item.name}</Text>
+              <Text style={styles.recordingMeta}>
+                {formatFileSize(item.size)} | {formatModifiedDate(item.modified)}
               </Text>
-            ) : null}
-            {item.modified ? (
-              <Text style={styles.meta}>{formatDate(item.modified)}</Text>
-            ) : null}
-            {isCurrent ? (
-              <Text style={styles.meta}>
-                {formatTime(playbackPosition)}{" "}
-                {hasProgress ? ` / ${durationText}` : ""}
+              {isCurrent ? (
+                <Text style={styles.progressText}>
+                  {formatMillis(playbackPosition)}
+                  {playbackDuration ? ` / ${formatMillis(playbackDuration)}` : ""}
+                </Text>
+              ) : null}
+            </View>
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>
+                {isCurrent ? (isPlaying ? "Playing" : "Loaded") : "Ready"}
               </Text>
-            ) : null}
+            </View>
           </View>
-          <View style={styles.rowActions}>
-            <TouchableOpacity
-              onPress={() => startRename(item)}
-              style={[styles.iconBtn, styles.renameBtn]}
-            >
-              <Ionicons name={"create"} size={20} color={"#0b0b0b"} />
-            </TouchableOpacity>
-            <TouchableOpacity
+
+          {isRenaming ? (
+            <View style={styles.renameRow}>
+              <TextInput
+                value={renameValue}
+                onChangeText={setRenameValue}
+                placeholder="Recording name"
+                placeholderTextColor="#64748b"
+                autoFocus
+                style={styles.renameInput}
+              />
+              <View style={styles.renameActions}>
+                <Pressable
+                  onPress={cancelRename}
+                  style={({ pressed }) => [
+                    styles.iconAction,
+                    styles.cancelAction,
+                    pressed && styles.buttonPressed,
+                  ]}
+                >
+                  <Ionicons name="close" size={18} color="#e2e8f0" />
+                </Pressable>
+                <Pressable
+                  onPress={submitRename}
+                  style={({ pressed }) => [
+                    styles.iconAction,
+                    pressed && styles.buttonPressed,
+                  ]}
+                >
+                  <Ionicons name="checkmark" size={18} color="#081018" />
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
+
+          <View style={[styles.recordingActions, isTablet && styles.recordingActionsWide]}>
+            <Pressable
               onPress={() => handlePlay(item)}
-              style={styles.iconBtn}
+              style={({ pressed }) => [
+                styles.actionButton,
+                pressed && styles.buttonPressed,
+              ]}
             >
               <Ionicons
                 name={isCurrent && isPlaying ? "pause" : "play"}
-                size={20}
-                color={"#0b0b0b"}
+                size={18}
+                color="#081018"
               />
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => handleDelete(item)}
-              style={[styles.iconBtn, styles.deleteBtn]}
+              <Text style={styles.actionText}>
+                {isCurrent && isPlaying ? "Pause" : "Play"}
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => startRename(item)}
+              style={({ pressed }) => [
+                styles.actionButton,
+                styles.outlineButton,
+                pressed && styles.buttonPressed,
+              ]}
             >
-              <Ionicons name={"trash"} size={20} color={"#0b0b0b"} />
-            </TouchableOpacity>
+              <Ionicons name="create-outline" size={18} color="#f8fafc" />
+              <Text style={styles.outlineText}>Rename</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => handleDelete(item)}
+              style={({ pressed }) => [
+                styles.actionButton,
+                styles.dangerButton,
+                pressed && styles.buttonPressed,
+              ]}
+            >
+              <Ionicons name="trash-outline" size={18} color="#fff7ed" />
+              <Text style={styles.dangerText}>Delete</Text>
+            </Pressable>
           </View>
         </View>
       );
     },
     [
+      cancelRename,
       currentUri,
-      isPlaying,
-      handlePlay,
       handleDelete,
+      handlePlay,
+      isPlaying,
+      isTablet,
+      isWide,
       playbackDuration,
       playbackPosition,
+      renameUri,
+      renameValue,
       startRename,
+      submitRename,
     ]
   );
-
-  const filteredItems = items.filter((it) =>
-    it.name.toLowerCase().includes(search.trim().toLowerCase())
-  );
-  const supportMailto = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(
-    "Audio Recorder Support"
-  )}`;
 
   if (isWeb) {
     return (
       <ThemedView style={styles.container}>
-        <Text>
-          Recordings are not available on web. Please use a device or emulator.
-        </Text>
+        <View style={[styles.webCard, isWide && styles.webCardWide]}>
+          <Text style={styles.webEyebrow}>Render-ready web demo</Text>
+          <Text style={styles.webTitle}>The web build is for showcasing the UI</Text>
+          <Text style={styles.webText}>
+            Expo web can host the library and recording interface, but live microphone
+            capture for this app still needs Android or iOS. Render is still useful for
+            shipping a public demo link.
+          </Text>
+          <View style={styles.webBullets}>
+            <Text style={styles.webBullet}>Static export goes to `dist/`.</Text>
+            <Text style={styles.webBullet}>Use a Render static site with a rewrite to `index.html`.</Text>
+            <Text style={styles.webBullet}>Add your final Render URL to the README after deploy.</Text>
+          </View>
+        </View>
       </ThemedView>
     );
   }
 
   return (
     <ThemedView style={styles.container}>
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-      <View style={styles.searchRow}>
-        <TextInput
-          placeholder="Search recordings..."
-          value={search}
-          onChangeText={setSearch}
-          style={styles.searchInput}
-          placeholderTextColor="#6b7280"
-        />
-      </View>
-      {renameUri ? (
-        <View style={styles.renameBar}>
-          <TextInput
-            value={renameValue}
-            onChangeText={setRenameValue}
-            style={styles.renameInput}
-            placeholder="New name"
-            placeholderTextColor="#6b7280"
-            autoFocus
-          />
-          <View style={styles.renameActions}>
-            <TouchableOpacity
-              onPress={cancelRename}
-              style={[styles.iconBtn, styles.cancelBtn]}
-            >
-              <Ionicons name="close" size={20} color="#0b0b0b" />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={submitRename} style={styles.iconBtn}>
-              <Ionicons name="checkmark" size={20} color="#0b0b0b" />
-            </TouchableOpacity>
-          </View>
-        </View>
-      ) : null}
       <FlatList
         data={filteredItems}
-        keyExtractor={(it) => it.uri}
-        renderItem={renderItem}
-        onRefresh={loadList}
+        keyExtractor={(item) => item.uri}
+        renderItem={renderRecording}
         refreshing={loading}
-        ListFooterComponent={
-          <View style={styles.supportCard}>
-            <Text style={styles.supportTitle}>Feedback & Support</Text>
-            <Text style={styles.supportText}>
-              Share feedback or get help with recordings and playback.
+        onRefresh={loadList}
+        contentContainerStyle={[styles.listContent, isWide && styles.listContentWide]}
+        ListHeaderComponent={
+          <View style={styles.heroCard}>
+            <Text style={styles.eyebrow}>Saved recordings</Text>
+            <Text style={styles.title}>Manage your library</Text>
+            <Text style={styles.subtitle}>
+              Search, preview, rename, and remove files stored on this device.
             </Text>
-            <View style={styles.supportRow}>
-              <TouchableOpacity
-                onPress={() => openLink(FEEDBACK_URL)}
-                style={styles.supportButton}
-              >
-                <Text style={styles.supportButtonText}>Submit Feedback</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => openLink(supportMailto)}
-                style={[styles.supportButton, styles.supportOutline]}
-              >
-                <Text style={styles.supportButtonTextOutline}>
-                  Contact Support
-                </Text>
-              </TouchableOpacity>
+
+            <View style={styles.heroIcons}>
+              <View style={styles.heroIconBubble}>
+                <Ionicons name="headset-outline" size={18} color={Palette.magenta} />
+              </View>
+              <View style={styles.heroIconBubble}>
+                <Ionicons name="sparkles-outline" size={18} color={Palette.yellow} />
+              </View>
+              <View style={styles.heroIconBubble}>
+                <Ionicons name="people-outline" size={18} color={Palette.coral} />
+              </View>
             </View>
+
+            <View style={styles.searchShell}>
+              <Ionicons name="search" size={18} color="#64748b" />
+              <TextInput
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Search by file name"
+                placeholderTextColor="#64748b"
+                style={styles.searchInput}
+              />
+              {search ? (
+                <Pressable onPress={() => setSearch("")}>
+                  <Ionicons name="close-circle" size={18} color="#94a3b8" />
+                </Pressable>
+              ) : null}
+            </View>
+
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryText}>{summaryText}</Text>
+              <View style={styles.summaryBadge}>
+                <Text style={styles.summaryBadgeText}>{items.length} total</Text>
+              </View>
+            </View>
+
+            {error ? (
+              <View style={styles.errorCard}>
+                <Ionicons name="alert-circle" size={18} color="#f87171" />
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            ) : null}
           </View>
         }
-        contentContainerStyle={
-          filteredItems.length === 0
-            ? [styles.emptyWrap, styles.listPadding]
-            : styles.listPadding
+        ListEmptyComponent={
+          <View style={[styles.emptyCard, isWide && styles.emptyCardWide]}>
+            <Ionicons name="mic-off-outline" size={28} color="#7dd3fc" />
+            <Text style={styles.emptyTitle}>
+              {search.trim() ? "No matching recordings" : "No saved recordings yet"}
+            </Text>
+            <Text style={styles.emptyText}>
+              {search.trim()
+                ? "Try a different search term or clear the filter."
+                : "Create a recording from the first tab, then it will appear here."}
+            </Text>
+          </View>
         }
-        ListEmptyComponent={<Text>No recordings yet</Text>}
       />
     </ThemedView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
+  container: { flex: 1 },
+  listContent: { padding: 16, gap: 16, paddingBottom: 120 },
+  listContentWide: {
+    alignSelf: "center",
+    width: "100%",
+    maxWidth: 1180,
+    padding: 24,
+    paddingBottom: 132,
+  },
+  heroCard: {
+    backgroundColor: "#341238",
+    borderRadius: 24,
     padding: 20,
-    gap: 12,
-    justifyContent: "flex-start",
-  },
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderRadius: 12,
+    gap: 14,
     borderWidth: 1,
-    borderColor: "#1f2937",
-    borderLeftWidth: 3,
-    borderLeftColor: "#ef4444",
-    backgroundColor: "#111111",
+    borderColor: "#ff70cd",
+    marginBottom: 16,
   },
-  rowInfo: {
-    flexDirection: "column",
-    flex: 1,
-    marginRight: 12,
-  },
-  name: {
-    fontWeight: "600",
-  },
-  meta: {
-    opacity: 0.6,
-    marginTop: 2,
+  eyebrow: {
+    color: Palette.yellow,
+    textTransform: "uppercase",
+    letterSpacing: 1.4,
     fontSize: 12,
-  },
-  rowActions: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  iconBtn: {
-    backgroundColor: Colors.light.tint,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  deleteBtn: {
-    backgroundColor: "#ef4444",
-  },
-  renameBtn: {
-    backgroundColor: Colors.light.tint,
-  },
-  cancelBtn: {
-    backgroundColor: "#9ca3af",
-  },
-  error: {
-    color: "#ef4444",
-  },
-  emptyWrap: {
-    flexGrow: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  listPadding: {
-    paddingBottom: 24,
-  },
-  searchRow: {
-    flexDirection: "row",
-    marginBottom: 8,
-  },
-  searchInput: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: Colors.light.tint,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: "#0b0b0b",
-    color: "#f5f5f5",
-  },
-  renameBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    marginBottom: 8,
-  },
-  renameInput: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: Colors.light.tint,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: "#0b0b0b",
-    color: "#f5f5f5",
-  },
-  renameActions: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  supportCard: {
-    marginTop: 20,
-    padding: 16,
-    borderRadius: 12,
-    backgroundColor: "#111111",
-    borderWidth: 1,
-    borderColor: "#1f2937",
-    borderLeftWidth: 3,
-    borderLeftColor: "#ef4444",
-  },
-  supportTitle: {
     fontWeight: "700",
-    marginBottom: 6,
   },
-  supportText: {
-    opacity: 0.7,
-    marginBottom: 12,
+  title: {
+    fontSize: 28,
+    lineHeight: 34,
+    fontWeight: "800",
+    fontFamily: Fonts.rounded,
   },
-  supportRow: {
+  subtitle: { color: "#ffe7f6", lineHeight: 22 },
+  heroIcons: { flexDirection: "row", gap: 10 },
+  heroIconBubble: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#5c1e4c",
+    borderWidth: 1,
+    borderColor: "#ff9cde",
+  },
+  searchShell: {
+    minHeight: 52,
+    borderRadius: 16,
+    backgroundColor: "#52194f",
+    borderWidth: 1,
+    borderColor: "#ff9cde",
+    paddingHorizontal: 14,
     flexDirection: "row",
+    alignItems: "center",
     gap: 10,
+  },
+  searchInput: { flex: 1, color: "#f8fafc", paddingVertical: 12 },
+  summaryRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
     flexWrap: "wrap",
   },
-  supportButton: {
-    backgroundColor: Colors.light.tint,
+  summaryText: { color: "#ffe7f6" },
+  summaryBadge: {
+    borderRadius: 999,
     paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  supportOutline: {
-    backgroundColor: "#0b0b0b",
+    paddingVertical: 8,
+    backgroundColor: "#52194f",
     borderWidth: 1,
-    borderColor: Colors.light.tint,
+    borderColor: "#ff9cde",
   },
-  supportButtonText: {
-    color: "#0b0b0b",
-    fontWeight: "600",
+  summaryBadgeText: { color: Colors.light.tint, fontWeight: "700" },
+  errorCard: {
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "center",
+    borderRadius: 16,
+    backgroundColor: "rgba(255, 112, 112, 0.18)",
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "rgba(248, 113, 113, 0.4)",
   },
-  supportButtonTextOutline: {
-    color: Colors.light.tint,
-    fontWeight: "600",
+  errorText: { color: "#fecaca", flex: 1 },
+  recordingCard: {
+    backgroundColor: "#341238",
+    borderRadius: 22,
+    padding: 18,
+    gap: 14,
+    borderWidth: 1,
+    borderColor: "#ff70cd",
   },
+  recordingCardWide: { alignSelf: "stretch" },
+  recordingHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  recordingCopy: { flex: 1, gap: 4 },
+  recordingName: { fontSize: 18, fontWeight: "800" },
+  recordingMeta: { color: "#fff3b0", fontSize: 13 },
+  progressText: {
+    color: Palette.yellow,
+    fontSize: 13,
+    fontWeight: "700",
+    fontFamily: Fonts.mono,
+    marginTop: 4,
+  },
+  badge: {
+    alignSelf: "flex-start",
+    borderRadius: 999,
+    backgroundColor: "#5c1e4c",
+    borderWidth: 1,
+    borderColor: "#ff9cde",
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  badgeText: { color: "#e2e8f0", fontSize: 12, fontWeight: "700" },
+  renameRow: { flexDirection: "row", gap: 10, alignItems: "center" },
+  renameInput: {
+    flex: 1,
+    minHeight: 50,
+    borderRadius: 14,
+    backgroundColor: "#52194f",
+    borderWidth: 1,
+    borderColor: "#ff9cde",
+    paddingHorizontal: 14,
+    color: "#f8fafc",
+  },
+  renameActions: { flexDirection: "row", gap: 8 },
+  iconAction: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: Colors.light.tint,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  cancelAction: { backgroundColor: "#6b1d57" },
+  recordingActions: { flexDirection: "row", gap: 10, flexWrap: "wrap" },
+  recordingActionsWide: { justifyContent: "flex-start" },
+  actionButton: {
+    minHeight: 46,
+    borderRadius: 14,
+    backgroundColor: Colors.light.tint,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  actionText: { color: "#081018", fontWeight: "800" },
+  outlineButton: {
+    backgroundColor: "#6b1d57",
+    borderWidth: 1,
+    borderColor: "#ff9cde",
+  },
+  outlineText: { color: "#f8fafc", fontWeight: "700" },
+  dangerButton: { backgroundColor: Palette.coral },
+  dangerText: { color: Palette.ink, fontWeight: "700" },
+  emptyCard: {
+    borderRadius: 24,
+    backgroundColor: "#341238",
+    borderWidth: 1,
+    borderColor: "#ff70cd",
+    padding: 24,
+    alignItems: "center",
+    gap: 10,
+  },
+  emptyCardWide: { minHeight: 220, justifyContent: "center" },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: "800",
+    fontFamily: Fonts.rounded,
+    textAlign: "center",
+  },
+  emptyText: { textAlign: "center", color: "#ffe7f6", lineHeight: 21 },
+  webCard: {
+    margin: 20,
+    backgroundColor: "#341238",
+    borderRadius: 24,
+    padding: 24,
+    gap: 12,
+    borderWidth: 1,
+    borderColor: "#ff70cd",
+  },
+  webCardWide: { alignSelf: "center", width: "100%", maxWidth: 980 },
+  webEyebrow: {
+    color: Palette.yellow,
+    textTransform: "uppercase",
+    letterSpacing: 1.4,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  webTitle: {
+    fontSize: 28,
+    lineHeight: 34,
+    fontWeight: "800",
+    fontFamily: Fonts.rounded,
+  },
+  webText: { color: "#ffe7f6", lineHeight: 22 },
+  webBullets: { gap: 8, marginTop: 4 },
+  webBullet: { color: "#fff3b0" },
+  buttonPressed: { opacity: 0.82 },
 });

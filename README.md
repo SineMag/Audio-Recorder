@@ -4,6 +4,8 @@
 
 Voice recorder with local, per-device storage (no cross-device sharing), playback, rename, delete, search, and per-file metadata. Recording is disabled on web (Expo limitation), but the web build can showcase the UI/list.
 
+Live site: add your Render URL here after deploy.
+
 ## Stack
 
 - Expo 54 (Router)
@@ -63,9 +65,24 @@ Audio-Recorder/
 
 ## Deploy to Render (static web demo)
 
-- Build command: `npm install && npm run export:web`
+This repo includes [`render.yaml`](/c:/Users/Trainee/Audio-Recorder/render.yaml), so Render can pick up the correct static-site settings automatically.
+
+Manual Render settings:
+
+- Runtime: `Static Site`
+- Build command: `npm ci && npm run export:web`
 - Publish directory: `dist`
-- Note: Recording is not available on web; this is for UI/list demo only.
+- Rewrite rule: `/* -> /index.html`
+
+Deploy steps:
+
+1. Push this repo to GitHub.
+2. In Render, click `New +` -> `Static Site`.
+3. Connect the GitHub repo and let Render read `render.yaml`, or enter the manual settings above.
+4. Deploy the site.
+5. Copy the generated Render URL and replace the `Live site:` placeholder near the top of this README.
+
+Note: Recording is not available on web; the Render deployment is for the public UI/demo build.
 
 ## Permissions / storage
 

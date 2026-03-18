@@ -1,46 +1,83 @@
 import Text from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
-import { Colors } from "@/constants/theme";
+import {
+  ensureRecordingsDir,
+  extractExtension,
+  formatDuration,
+  formatFileSize,
+  formatMillis,
+  RECORDINGS_DIR,
+  sanitizeRecordingName,
+} from "@/constants/recordings";
+import { Colors, Fonts, Palette } from "@/constants/theme";
 import { Ionicons } from "@expo/vector-icons";
 import { Audio } from "expo-av";
+// eslint-disable-next-line import/no-unresolved
 import * as FileSystem from "expo-file-system/legacy";
-import React, { useEffect, useRef, useState } from "react";
-import { Platform, StyleSheet, TouchableOpacity, View } from "react-native";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  useWindowDimensions,
+  View,
+} from "react-native";
+
+type PreviewMeta = {
+  size?: number;
+};
 
 export default function HomeScreen() {
+  const { width } = useWindowDimensions();
+  const isWide = width >= 900;
+  const isTablet = width >= 680;
+  const isWeb = Platform.OS === "web";
+
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [recordingUri, setRecordingUri] = useState<string | null>(null);
-  const [isRecording, setIsRecording] = useState(false);
+  const [pendingUri, setPendingUri] = useState<string | null>(null);
+  const [previewMeta, setPreviewMeta] = useState<PreviewMeta | null>(null);
   const [sound, setSound] = useState<Audio.Sound | null>(null);
   const [elapsed, setElapsed] = useState(0);
-  const startTimeRef = useRef<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [blink, setBlink] = useState(false);
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
-  const [pendingUri, setPendingUri] = useState<string | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [playbackPosition, setPlaybackPosition] = useState(0);
   const [playbackDuration, setPlaybackDuration] = useState<number | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [lastSavedName, setLastSavedName] = useState<string | null>(null);
+  const [showSavePrompt, setShowSavePrompt] = useState(false);
+  const [draftName, setDraftName] = useState("");
 
-  const DOC_DIR = (FileSystem as any).documentDirectory as string | null;
-  const CACHE_DIR = (FileSystem as any).cacheDirectory as string | null;
-  const BASE_DIR = DOC_DIR ?? CACHE_DIR ?? null;
-  const RECORDINGS_DIR = BASE_DIR ? `${BASE_DIR}recordings/` : null;
+  const startTimeRef = useRef<number | null>(null);
+  const previewUri = pendingUri ?? recordingUri;
 
-  async function ensureRecordingsDir() {
-    if (!RECORDINGS_DIR) {
-      throw new Error("No base directory available for recordings");
+  function getRecordingErrorMessage(error: unknown) {
+    const message =
+      typeof error === "object" &&
+      error !== null &&
+      "message" in error &&
+      typeof (error as { message?: unknown }).message === "string"
+        ? (error as { message: string }).message
+        : "";
+
+    if (!message) {
+      return "Failed to start recording. Check microphone permission and try again.";
     }
-    const info = await FileSystem.getInfoAsync(RECORDINGS_DIR);
-    if (!info.exists) {
-      await FileSystem.makeDirectoryAsync(RECORDINGS_DIR, {
-        intermediates: true,
-      });
+
+    if (/simulator/i.test(message)) {
+      return "Recording is not supported in the iOS simulator. Use a real device.";
     }
+
+    return message;
   }
 
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | undefined;
+
     if (isRecording && !isPaused) {
       interval = setInterval(() => {
         if (startTimeRef.current) {
@@ -48,19 +85,11 @@ export default function HomeScreen() {
         }
       }, 250);
     }
+
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [isRecording, isPaused]);
-
-  useEffect(() => {
-    if (!isRecording || isPaused) {
-      setBlink(false);
-      return;
-    }
-    const id = setInterval(() => setBlink((b) => !b), 500);
-    return () => clearInterval(id);
-  }, [isRecording, isPaused]);
+  }, [isPaused, isRecording]);
 
   useEffect(() => {
     return () => {
@@ -70,102 +99,148 @@ export default function HomeScreen() {
     };
   }, [sound]);
 
+  const statusText = useMemo(() => {
+    if (isWeb) return "Web demo only";
+    if (isRecording && isPaused) return "Paused";
+    if (isRecording) return "Recording";
+    if (pendingUri) return "Ready to save";
+    if (recordingUri) return "Latest saved";
+    return "Ready";
+  }, [isPaused, isRecording, isWeb, pendingUri, recordingUri]);
+
+  async function teardownSound() {
+    if (!sound) return;
+
+    try {
+      const status = await sound.getStatusAsync();
+      if (status.isLoaded && status.isPlaying) {
+        await sound.stopAsync();
+      }
+    } catch {}
+
+    try {
+      await sound.unloadAsync();
+    } catch {}
+
+    setSound(null);
+    setIsPlaying(false);
+    setPlaybackPosition(0);
+    setPlaybackDuration(null);
+  }
+
+  async function hydratePreviewMeta(uri: string) {
+    const info = await FileSystem.getInfoAsync(uri);
+    if (info.exists && "size" in (info as any)) {
+      setPreviewMeta({ size: (info as any).size });
+      return;
+    }
+    setPreviewMeta(null);
+  }
+
   async function startRecording() {
     setError(null);
+    setLastSavedName(null);
+    setShowSavePrompt(false);
+
     try {
-      if (Platform.OS === "web") {
-        setError(
-          "Recording is not supported on web. Please use a device or emulator."
-        );
+      if (isWeb) {
+        setError("Recording is not supported on web. Use Android or iOS.");
         return;
       }
 
       const current = await Audio.getPermissionsAsync();
       let status = current.status;
+
       if (status !== "granted") {
-        const req = await Audio.requestPermissionsAsync();
-        status = req.status;
+        const request = await Audio.requestPermissionsAsync();
+        status = request.status;
       }
+
       if (status !== "granted") {
-        setError("Microphone permission is required");
+        setError("Microphone permission is required to record audio.");
         return;
       }
 
+      await teardownSound();
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
       });
 
-      // Reset playback and pending state
-      if (sound) {
-        try {
-          await sound.unloadAsync();
-        } catch {}
-        setSound(null);
-      }
       setPendingUri(null);
       setRecordingUri(null);
-      setPlaybackPosition(0);
-      setPlaybackDuration(null);
+      setPreviewMeta(null);
+      setElapsed(0);
 
-      const { recording } = await Audio.Recording.createAsync(
+      const nextRecording = new Audio.Recording();
+      await nextRecording.prepareToRecordAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
+      await nextRecording.startAsync();
+
       startTimeRef.current = Date.now();
-      setElapsed(0);
-      setRecording(recording);
+      setRecording(nextRecording);
       setIsRecording(true);
       setIsPaused(false);
-    } catch (e) {
-      setError("Failed to start recording");
+    } catch (error) {
+      console.log("Failed to start recording", error);
+      setError(getRecordingErrorMessage(error));
     }
   }
 
   async function pauseRecording() {
+    if (!recording) return;
+
     try {
-      if (!recording) return;
       await (recording as any).pauseAsync?.();
       setIsPaused(true);
-    } catch (e) {
-      setError("Failed to pause");
+    } catch {
+      setError("Failed to pause the current recording.");
     }
   }
 
   async function resumeRecording() {
+    if (!recording) return;
+
     try {
-      if (!recording) return;
       startTimeRef.current = Date.now() - elapsed * 1000;
       await (recording as any).startAsync?.();
       setIsPaused(false);
-    } catch (e) {
-      setError("Failed to resume");
+    } catch {
+      setError("Failed to resume the recording.");
     }
   }
 
   async function stopRecording() {
+    if (!recording) return;
+
     try {
-      if (!recording) return;
       await recording.stopAndUnloadAsync();
       await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+
       const uri = recording.getURI();
       setRecording(null);
       setIsRecording(false);
       setIsPaused(false);
+
       if (!uri) {
-        setError("No recording URI available");
+        setError("No recording file was created.");
         return;
       }
-      // Keep as pending until user taps Save
+
+      await teardownSound();
       setPendingUri(uri);
-    } catch (e) {
-      setError("Failed to stop recording");
+      setDraftName(`recording-${new Date().getTime()}`);
+      await hydratePreviewMeta(uri);
+    } catch {
+      setError("Failed to stop recording.");
     }
   }
 
   async function togglePlayback() {
-    const src = pendingUri ?? recordingUri;
-    if (!src) return;
+    if (!previewUri) return;
     setError(null);
+
     try {
       if (sound) {
         const status = await sound.getStatusAsync();
@@ -178,334 +253,587 @@ export default function HomeScreen() {
         setIsPlaying(true);
         return;
       }
-      const { sound: created } = await Audio.Sound.createAsync({ uri: src });
-      created.setOnPlaybackStatusUpdate((s: any) => {
-        if (!s.isLoaded) return;
-        if ("didJustFinish" in s && s.didJustFinish) setIsPlaying(false);
-        else setIsPlaying(!!s.isPlaying);
-        if ("positionMillis" in s && typeof s.positionMillis === "number") {
-          setPlaybackPosition(s.positionMillis);
+
+      const { sound: createdSound } = await Audio.Sound.createAsync({
+        uri: previewUri,
+      });
+
+      createdSound.setOnPlaybackStatusUpdate((status: any) => {
+        if (!status.isLoaded) return;
+        if ("didJustFinish" in status && status.didJustFinish) {
+          setIsPlaying(false);
+          setPlaybackPosition(0);
+        } else {
+          setIsPlaying(!!status.isPlaying);
         }
-        if ("durationMillis" in s && typeof s.durationMillis === "number") {
-          setPlaybackDuration(s.durationMillis);
+        if ("positionMillis" in status && typeof status.positionMillis === "number") {
+          setPlaybackPosition(status.positionMillis);
+        }
+        if ("durationMillis" in status && typeof status.durationMillis === "number") {
+          setPlaybackDuration(status.durationMillis);
         }
       });
-      setSound(created);
+
+      setSound(createdSound);
       setPlaybackPosition(0);
       setPlaybackDuration(null);
-      await created.playAsync();
+      await createdSound.playAsync();
       setIsPlaying(true);
-    } catch (e) {
-      setError("Playback error");
+    } catch {
+      setError("Playback failed for this recording.");
     }
   }
 
-  function resetRecording() {
-    if (sound) {
-      sound.unloadAsync();
-      setSound(null);
-    }
-    setRecordingUri(null);
-    setPendingUri(null);
-    setElapsed(0);
-    startTimeRef.current = null;
-    setIsPlaying(false);
-    setPlaybackPosition(0);
-    setPlaybackDuration(null);
-  }
-
-  async function saveRecording() {
+  async function discardPreview() {
     setError(null);
-    try {
-      if (!pendingUri) return;
-      // Ensure nothing is holding the file open before moving it
-      if (sound) {
-        try {
-          const status = await sound.getStatusAsync();
-          if (status.isLoaded) {
-            await sound.stopAsync();
-          }
-        } catch {}
-        try {
-          await sound.unloadAsync();
-        } catch {}
-        setSound(null);
-        setIsPlaying(false);
-      }
+    setShowSavePrompt(false);
 
+    try {
+      await teardownSound();
+      if (pendingUri) {
+        await FileSystem.deleteAsync(pendingUri, { idempotent: true });
+      }
+    } catch {}
+
+    setPendingUri(null);
+    setRecordingUri(null);
+    setPreviewMeta(null);
+    setElapsed(0);
+    setDraftName("");
+    startTimeRef.current = null;
+  }
+
+  async function commitSave(customName?: string) {
+    if (!pendingUri || !RECORDINGS_DIR) return;
+
+    setError(null);
+    setIsSaving(true);
+
+    try {
+      await teardownSound();
       await ensureRecordingsDir();
 
-      // Make sure the temp recording still exists before we try to move/copy it
       const tmpInfo = await FileSystem.getInfoAsync(pendingUri);
       if (!tmpInfo.exists) {
-        setError("Could not find the temporary recording to save.");
+        setError("Temporary recording could not be found.");
         return;
       }
-      const extMatch = pendingUri.match(/\.([a-zA-Z0-9]+)(?:\?|$)/);
-      const ext = extMatch?.[1] ?? "m4a";
-      if (!RECORDINGS_DIR) {
-        setError("Recordings folder is not available on this device.");
+
+      const ext = extractExtension(pendingUri);
+      const cleaned = sanitizeRecordingName(customName?.trim() ?? "");
+      const fileName = cleaned ? `${cleaned}.${ext}` : `rec_${Date.now()}.${ext}`;
+      const destination = `${RECORDINGS_DIR}${fileName}`;
+      const existing = await FileSystem.getInfoAsync(destination);
+
+      if (existing.exists) {
+        setError("A recording with that name already exists.");
         return;
       }
-      const dest = `${RECORDINGS_DIR}rec_${Date.now()}.${ext}`;
+
       try {
-        await FileSystem.moveAsync({ from: pendingUri, to: dest });
-      } catch (err) {
-        try {
-          await FileSystem.copyAsync({ from: pendingUri, to: dest });
-          await FileSystem.deleteAsync(pendingUri, { idempotent: true });
-        } catch {
-          throw err;
-        }
+        await FileSystem.moveAsync({ from: pendingUri, to: destination });
+      } catch {
+        await FileSystem.copyAsync({ from: pendingUri, to: destination });
+        await FileSystem.deleteAsync(pendingUri, { idempotent: true });
       }
-      setRecordingUri(dest);
+
+      setRecordingUri(destination);
       setPendingUri(null);
-      setError(null);
-    } catch (e: any) {
-      console.log("Failed to save recording", e);
+      setLastSavedName(fileName);
+      setShowSavePrompt(false);
+      await hydratePreviewMeta(destination);
+    } catch (saveError: any) {
       const message =
-        typeof e?.message === "string"
-          ? e.message
-          : "Failed to save recording. Please try again.";
+        typeof saveError?.message === "string"
+          ? saveError.message
+          : "Failed to save the recording.";
       setError(message);
+    } finally {
+      setIsSaving(false);
     }
-  }
-
-  function formatTime(totalSeconds: number) {
-    const mm = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
-    const ss = String(totalSeconds % 60).padStart(2, "0");
-    return `${mm}:${ss}`;
-  }
-
-  function formatMillis(totalMillis: number) {
-    return formatTime(Math.floor(totalMillis / 1000));
   }
 
   return (
     <ThemedView style={styles.container}>
-      <View style={styles.card}>
-        <Text style={styles.timer}>
-          {isRecording
-            ? `Recording - ${formatTime(elapsed)}`
-            : elapsed > 0
-            ? formatTime(elapsed)
-            : ""}
-        </Text>
+      <ScrollView contentContainerStyle={[styles.content, isWide && styles.contentWide]}>
+        <View style={styles.topBlock}>
+          <View style={styles.topHeader}>
+            <View>
+              <Text style={styles.eyebrow}>Record</Text>
+              <Text style={styles.title}>Start recording</Text>
+            </View>
+            <View style={styles.statusPill}>
+              <View
+                style={[
+                  styles.statusDot,
+                  isRecording && !isPaused ? styles.statusDotLive : styles.statusDotIdle,
+                ]}
+              />
+              <Text style={styles.statusPillText}>{statusText}</Text>
+            </View>
+          </View>
 
-        {error ? <Text style={styles.error}>{error}</Text> : null}
+          <View style={styles.timerPanel}>
+            <Text style={styles.timerValue}>{formatDuration(elapsed)}</Text>
+            <Text style={styles.timerLabel}>
+              {isRecording ? "Elapsed recording time" : "Tap below to begin"}
+            </Text>
+          </View>
 
-        <View style={styles.primaryRow}>
-          {!isRecording && (
-            <TouchableOpacity
-              onPress={startRecording}
-              style={styles.primaryBtn}
-            >
-              <View style={styles.iconWithLabel}>
-                <Ionicons name="mic" size={36} color="#0b0b0b" />
-                <Text style={styles.iconLabel}>Record</Text>
-              </View>
-            </TouchableOpacity>
-          )}
-
-          {isRecording && (
-            <>
-              <TouchableOpacity
-                onPress={stopRecording}
-                style={[styles.primaryBtn, styles.stopBtn]}
+          <View style={[styles.primaryActions, isTablet && styles.primaryActionsWide]}>
+            {!isRecording ? (
+              <Pressable
+                onPress={startRecording}
+                style={({ pressed }) => [
+                  styles.recordButton,
+                  styles.recordButtonHero,
+                  pressed && styles.buttonPressed,
+                ]}
               >
-                <View style={styles.iconWithLabel}>
-                  <Ionicons name="stop" size={36} color="#0b0b0b" />
-                  <Text style={styles.iconLabel}>Stop</Text>
-                </View>
-              </TouchableOpacity>
-              {isPaused ? (
-                <TouchableOpacity
-                  onPress={resumeRecording}
-                  style={styles.primaryBtn}
+                <Ionicons name="mic" size={32} color={Palette.ink} />
+                <Text style={styles.recordButtonText}>Start recording</Text>
+              </Pressable>
+            ) : (
+              <>
+                <Pressable
+                  onPress={stopRecording}
+                  style={({ pressed }) => [
+                    styles.secondaryAction,
+                    styles.stopAction,
+                    pressed && styles.buttonPressed,
+                  ]}
                 >
-                  <View style={styles.iconWithLabel}>
-                    <Ionicons name="play-forward" size={36} color="#0b0b0b" />
-                    <Text style={styles.iconLabel}>Continue</Text>
-                  </View>
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity
-                  onPress={pauseRecording}
-                  style={styles.primaryBtn}
+                  <Ionicons name="stop" size={22} color={Palette.ink} />
+                  <Text style={styles.secondaryActionText}>Stop</Text>
+                </Pressable>
+                <Pressable
+                  onPress={isPaused ? resumeRecording : pauseRecording}
+                  style={({ pressed }) => [
+                    styles.secondaryAction,
+                    pressed && styles.buttonPressed,
+                  ]}
                 >
-                  <View style={styles.iconWithLabel}>
-                    <Ionicons name="pause" size={36} color="#0b0b0b" />
-                    <Text style={styles.iconLabel}>Pause</Text>
-                  </View>
-                </TouchableOpacity>
-              )}
-            </>
-          )}
+                  <Ionicons
+                    name={isPaused ? "play-forward" : "pause"}
+                    size={22}
+                    color={Palette.ink}
+                  />
+                  <Text style={styles.secondaryActionText}>
+                    {isPaused ? "Resume" : "Pause"}
+                  </Text>
+                </Pressable>
+              </>
+            )}
+          </View>
 
-          {false && (
-            <TouchableOpacity
-              onPress={resumeRecording}
-              style={styles.primaryBtn}
-            >
-              <View style={styles.iconWithLabel}>
-                <Ionicons name="play-forward" size={36} color="#ffffff" />
-                <Text style={styles.iconLabel}>Continue</Text>
-              </View>
-            </TouchableOpacity>
-          )}
+          {isRecording ? (
+            <View style={styles.liveIndicator}>
+              <View style={[styles.livePulse, isPaused && styles.livePulsePaused]} />
+              <Text style={styles.liveText}>
+                {isPaused ? "Recording paused" : "Recording in progress"}
+              </Text>
+            </View>
+          ) : null}
         </View>
 
-        {isRecording && !isPaused ? (
-          <View style={styles.recordWrap}>
-            <View style={[styles.pulse, { opacity: blink ? 1 : 0.4 }]} />
+        <View style={[styles.bottomGrid, isWide && styles.bottomGridWide]}>
+          <View style={styles.previewPanel}>
+            <View style={styles.previewHeader}>
+              <View style={styles.previewHeaderCopy}>
+                <Text style={styles.previewTitle}>Preview</Text>
+                <Text style={styles.previewSubtitle}>
+                  {pendingUri
+                    ? "Listen back, then save with a custom name or skip naming."
+                    : recordingUri
+                    ? "Your latest saved file is still available here."
+                    : "Your next take will appear here once you stop recording."}
+                </Text>
+              </View>
+              <Ionicons
+                name={pendingUri ? "radio" : recordingUri ? "save" : "musical-notes-outline"}
+                size={24}
+                color={Palette.yellow}
+              />
+            </View>
+
+            <View style={[styles.infoChips, isTablet && styles.infoChipsWide]}>
+              <View style={styles.infoChip}>
+                <Ionicons name="time-outline" size={16} color={Palette.yellow} />
+                <Text style={styles.infoChipText}>
+                  {formatMillis(playbackPosition)}
+                  {playbackDuration ? ` / ${formatMillis(playbackDuration)}` : ""}
+                </Text>
+              </View>
+              <View style={styles.infoChip}>
+                <Ionicons name="document-outline" size={16} color={Palette.pink} />
+                <Text style={styles.infoChipText}>
+                  {previewMeta ? formatFileSize(previewMeta.size) : "No file yet"}
+                </Text>
+              </View>
+            </View>
+
+            <View style={[styles.previewActions, isTablet && styles.previewActionsWide]}>
+              <Pressable
+                disabled={!previewUri}
+                onPress={togglePlayback}
+                style={({ pressed }) => [
+                  styles.inlineButton,
+                  !previewUri && styles.inlineButtonDisabled,
+                  pressed && previewUri ? styles.buttonPressed : null,
+                ]}
+              >
+                <Ionicons name={isPlaying ? "pause" : "play"} size={18} color={Palette.ink} />
+                <Text style={styles.inlineButtonText}>
+                  {isPlaying ? "Pause preview" : "Play preview"}
+                </Text>
+              </Pressable>
+              <Pressable
+                disabled={!pendingUri || isSaving}
+                onPress={() => setShowSavePrompt(true)}
+                style={({ pressed }) => [
+                  styles.inlineButton,
+                  !pendingUri && styles.inlineButtonDisabled,
+                  pressed && pendingUri ? styles.buttonPressed : null,
+                ]}
+              >
+                <Ionicons name="save-outline" size={18} color={Palette.ink} />
+                <Text style={styles.inlineButtonText}>
+                  {isSaving ? "Saving..." : "Save recording"}
+                </Text>
+              </Pressable>
+              <Pressable
+                disabled={!pendingUri && !recordingUri}
+                onPress={discardPreview}
+                style={({ pressed }) => [
+                  styles.ghostButton,
+                  !pendingUri && !recordingUri && styles.inlineButtonDisabled,
+                  pressed && (pendingUri || recordingUri) ? styles.buttonPressed : null,
+                ]}
+              >
+                <Ionicons name="trash-outline" size={18} color="#f8fafc" />
+                <Text style={styles.ghostButtonText}>
+                  {pendingUri ? "Discard take" : "Clear preview"}
+                </Text>
+              </Pressable>
+            </View>
+
+            {showSavePrompt && pendingUri ? (
+              <View style={styles.namingCard}>
+                <Text style={styles.namingTitle}>Name this recording?</Text>
+                <Text style={styles.namingText}>
+                  Give it a custom name now, or skip and save with an automatic file name.
+                </Text>
+                <TextInput
+                  value={draftName}
+                  onChangeText={setDraftName}
+                  placeholder="Optional recording name"
+                  placeholderTextColor="#ffd8ef"
+                  style={styles.nameInput}
+                />
+                <View style={[styles.namingActions, isTablet && styles.previewActionsWide]}>
+                  <Pressable
+                    onPress={() => commitSave(draftName)}
+                    style={({ pressed }) => [styles.inlineButton, pressed && styles.buttonPressed]}
+                  >
+                    <Ionicons name="checkmark" size={18} color={Palette.ink} />
+                    <Text style={styles.inlineButtonText}>Save with name</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => commitSave()}
+                    style={({ pressed }) => [styles.ghostButton, pressed && styles.buttonPressed]}
+                  >
+                    <Ionicons name="arrow-forward" size={18} color="#f8fafc" />
+                    <Text style={styles.ghostButtonText}>Skip naming</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => setShowSavePrompt(false)}
+                    style={({ pressed }) => [styles.cancelButton, pressed && styles.buttonPressed]}
+                  >
+                    <Ionicons name="close" size={18} color="#f8fafc" />
+                    <Text style={styles.cancelButtonText}>Cancel</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+          </View>
+
+          <View style={styles.summaryPanel}>
+            <View style={styles.metricCard}>
+              <Ionicons name="phone-portrait-outline" size={18} color={Palette.yellow} />
+              <Text style={styles.metricLabel}>Storage</Text>
+              <Text style={styles.metricValue}>Saved on this device only</Text>
+            </View>
+          </View>
+        </View>
+
+        {error ? (
+          <View style={styles.alertCard}>
+            <Ionicons name="alert-circle" size={18} color="#f87171" />
+            <Text style={styles.alertText}>{error}</Text>
           </View>
         ) : null}
 
-        <View style={styles.controls}>
-          <TouchableOpacity
-            disabled={!pendingUri && !recordingUri}
-            onPress={togglePlayback}
-              style={[
-                styles.actionButton,
-                !pendingUri && !recordingUri && styles.actionButtonDisabled,
-              ]}
-            >
-              <View style={styles.iconWithLabel}>
-                <Ionicons
-                  name={isPlaying ? "pause" : "play"}
-                  size={20}
-                  color="#0b0b0b"
-                />
-                <Text style={styles.iconLabel}>Play</Text>
-              </View>
-            </TouchableOpacity>
-          <TouchableOpacity
-            disabled={!pendingUri}
-            onPress={saveRecording}
-            style={[
-              styles.actionButton,
-              !pendingUri && styles.actionButtonDisabled,
-            ]}
-          >
-            <View style={styles.iconWithLabel}>
-              <Ionicons name="save-outline" size={20} color="#0b0b0b" />
-              <Text style={styles.iconLabel}>Save</Text>
-            </View>
-          </TouchableOpacity>
-        </View>
-        {(isPlaying || playbackPosition > 0) && (
-          <Text style={styles.playbackMeta}>
-            {formatMillis(playbackPosition)}{" "}
-            {playbackDuration ? `/ ${formatMillis(playbackDuration)}` : ""}
-          </Text>
-        )}
-      </View>
+        {lastSavedName ? (
+          <View style={styles.successCard}>
+            <Ionicons name="checkmark-circle" size={18} color="#34d399" />
+            <Text style={styles.successText}>{lastSavedName} saved</Text>
+          </View>
+        ) : null}
+      </ScrollView>
     </ThemedView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    padding: 20,
-    justifyContent: "center",
-  },
-  card: {
-    borderRadius: 16,
+  container: { flex: 1 },
+  content: { padding: 16, gap: 16, paddingBottom: 120 },
+  contentWide: {
+    alignSelf: "center",
+    width: "100%",
+    maxWidth: 1180,
     padding: 24,
-    alignItems: "stretch",
-    gap: 20,
-    backgroundColor: "#111111",
+    paddingBottom: 132,
+  },
+  topBlock: {
+    backgroundColor: "#341238",
+    borderRadius: 24,
+    padding: 20,
+    gap: 18,
     borderWidth: 1,
-    borderColor: "#1f2937",
-    borderTopWidth: 3,
-    borderTopColor: "#ef4444",
+    borderColor: "#ff70cd",
   },
-  primaryRow: {
+  topHeader: {
     flexDirection: "row",
-    flexWrap: "wrap",
+    justifyContent: "space-between",
     gap: 12,
+    alignItems: "flex-start",
+    flexWrap: "wrap",
+  },
+  eyebrow: {
+    color: Palette.yellow,
+    textTransform: "uppercase",
+    letterSpacing: 1.4,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  title: {
+    fontSize: 32,
+    lineHeight: 38,
+    fontWeight: "800",
+    fontFamily: Fonts.rounded,
+  },
+  statusPill: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    gap: 8,
+    borderRadius: 999,
+    backgroundColor: "#4b1643",
+    borderWidth: 1,
+    borderColor: "#ff9cde",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
-  primaryBtn: {
-    backgroundColor: Colors.light.tint,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 12,
-    minWidth: 120,
-    alignItems: "center",
-  },
-  stopBtn: {
-    backgroundColor: "#ef4444",
-  },
-  timer: {
-    fontSize: 16,
-    opacity: 0.8,
-  },
-  error: {
-    color: "#ef4444",
-  },
-  iconWithLabel: {
+  statusDot: { width: 10, height: 10, borderRadius: 5 },
+  statusDotLive: { backgroundColor: Palette.magenta },
+  statusDotIdle: { backgroundColor: Palette.yellow },
+  statusPillText: { fontSize: 13, fontWeight: "700" },
+  timerPanel: {
+    borderRadius: 20,
+    backgroundColor: "#52194f",
+    borderWidth: 1,
+    borderColor: "#ff9cde",
+    padding: 18,
     alignItems: "center",
     gap: 6,
   },
-  iconLabel: {
-    color: "#0b0b0b",
-    fontWeight: "600",
+  timerValue: {
+    fontSize: 48,
+    lineHeight: 54,
+    fontWeight: "800",
+    fontFamily: Fonts.mono,
   },
-  recordWrap: {
-    alignItems: "center",
-    justifyContent: "center",
-    marginVertical: 12,
-  },
-  pulse: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    borderWidth: 3,
-    borderColor: "#ef4444",
-  },
+  timerLabel: { color: "#fff3b0", fontSize: 13 },
+  primaryActions: { gap: 12 },
+  primaryActionsWide: { flexDirection: "row", flexWrap: "wrap" },
   recordButton: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
+    minHeight: 60,
+    borderRadius: 18,
     backgroundColor: Colors.light.tint,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    gap: 10,
   },
-  recordButtonActive: {
-    backgroundColor: "#ef4444",
-  },
-  recordLabel: {
-    color: "#ffffff",
-    fontSize: 18,
-    fontWeight: "700",
-  },
-  controls: {
-    flexDirection: "row",
-    gap: 12,
-    marginTop: 12,
-    justifyContent: "center",
-  },
-  actionButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
+  recordButtonHero: { width: "100%" },
+  recordButtonText: { color: Palette.ink, fontWeight: "800", fontSize: 16 },
+  secondaryAction: {
+    minHeight: 56,
+    borderRadius: 18,
     backgroundColor: Colors.light.tint,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    flex: 1,
   },
-  actionButtonDisabled: {
-    opacity: 0.4,
+  stopAction: { backgroundColor: Palette.coral },
+  secondaryActionText: { color: Palette.ink, fontWeight: "800" },
+  liveIndicator: {
+    minHeight: 120,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#ff9cde",
+    backgroundColor: "#52194f",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
   },
-  playbackMeta: {
-    marginTop: 8,
-    textAlign: "center",
-    color: Colors.light.tint,
-    fontWeight: "600",
+  livePulse: {
+    width: 74,
+    height: 74,
+    borderRadius: 37,
+    borderWidth: 10,
+    borderColor: "rgba(255, 20, 118, 0.32)",
+    backgroundColor: Palette.magenta,
   },
-  actionText: {
-    color: "#ffffff",
-    fontWeight: "600",
+  livePulsePaused: {
+    opacity: 0.55,
+    backgroundColor: Palette.yellow,
+    borderColor: "rgba(254, 255, 0, 0.35)",
   },
+  liveText: { color: "#fff3b0" },
+  bottomGrid: { gap: 16 },
+  bottomGridWide: { flexDirection: "row", alignItems: "flex-start" },
+  previewPanel: {
+    flex: 1.4,
+    backgroundColor: "#341238",
+    borderRadius: 24,
+    padding: 20,
+    gap: 16,
+    borderWidth: 1,
+    borderColor: "#ff70cd",
+  },
+  summaryPanel: { flex: 1, gap: 12 },
+  previewHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 14,
+  },
+  previewHeaderCopy: { flex: 1, gap: 4 },
+  previewTitle: { fontSize: 22, fontWeight: "800", fontFamily: Fonts.rounded },
+  previewSubtitle: { color: "#ffe7f6", lineHeight: 21 },
+  infoChips: { gap: 10 },
+  infoChipsWide: { flexDirection: "row", flexWrap: "wrap" },
+  infoChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: "#52194f",
+    borderWidth: 1,
+    borderColor: "#ff9cde",
+  },
+  infoChipText: { color: "#fffcee", fontWeight: "700", fontFamily: Fonts.mono },
+  previewActions: { gap: 12 },
+  previewActionsWide: { flexDirection: "row", flexWrap: "wrap" },
+  inlineButton: {
+    minHeight: 48,
+    borderRadius: 16,
+    backgroundColor: Colors.light.tint,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  inlineButtonText: { color: Palette.ink, fontWeight: "800" },
+  ghostButton: {
+    minHeight: 48,
+    borderRadius: 16,
+    backgroundColor: "#6b1d57",
+    borderWidth: 1,
+    borderColor: "#ff9cde",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  ghostButtonText: { color: "#f8fafc", fontWeight: "700" },
+  cancelButton: {
+    minHeight: 48,
+    borderRadius: 16,
+    backgroundColor: "#431542",
+    borderWidth: 1,
+    borderColor: "#b76aa2",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  cancelButtonText: { color: "#f8fafc", fontWeight: "700" },
+  namingCard: {
+    borderRadius: 18,
+    padding: 16,
+    gap: 12,
+    backgroundColor: "#52194f",
+    borderWidth: 1,
+    borderColor: "#ff9cde",
+  },
+  namingTitle: { fontSize: 18, fontWeight: "800" },
+  namingText: { color: "#ffe7f6", lineHeight: 20 },
+  nameInput: {
+    minHeight: 50,
+    borderRadius: 14,
+    backgroundColor: "#6b1d57",
+    borderWidth: 1,
+    borderColor: "#ff9cde",
+    paddingHorizontal: 14,
+    color: "#f8fafc",
+  },
+  namingActions: { gap: 10 },
+  metricCard: {
+    borderRadius: 18,
+    backgroundColor: "#341238",
+    borderWidth: 1,
+    borderColor: "#ff70cd",
+    padding: 16,
+    gap: 6,
+  },
+  metricLabel: { color: "#fff3b0", fontSize: 13 },
+  metricValue: { fontWeight: "700", fontSize: 16 },
+  alertCard: {
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "center",
+    borderRadius: 16,
+    backgroundColor: "rgba(255, 112, 112, 0.18)",
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "rgba(248, 113, 113, 0.4)",
+  },
+  alertText: { color: "#fecaca", flex: 1 },
+  successCard: {
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "center",
+    borderRadius: 16,
+    backgroundColor: "rgba(254, 255, 0, 0.12)",
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "rgba(254, 255, 0, 0.38)",
+  },
+  successText: { color: "#fff9bf", flex: 1 },
+  inlineButtonDisabled: { opacity: 0.45 },
+  buttonPressed: { opacity: 0.82 },
 });
-
