@@ -16,6 +16,7 @@ import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system/legacy";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -517,44 +518,6 @@ export default function HomeScreen() {
               </Pressable>
             </View>
 
-            {showSavePrompt && pendingUri ? (
-              <View style={styles.namingCard}>
-                <Text style={styles.namingTitle}>Name this recording?</Text>
-                <Text style={styles.namingText}>
-                  Give it a custom name now, or skip and save with an automatic file name.
-                </Text>
-                <TextInput
-                  value={draftName}
-                  onChangeText={setDraftName}
-                  placeholder="Optional recording name"
-                  placeholderTextColor="#ffd8ef"
-                  style={styles.nameInput}
-                />
-                <View style={[styles.namingActions, isTablet && styles.previewActionsWide]}>
-                  <Pressable
-                    onPress={() => commitSave(draftName)}
-                    style={({ pressed }) => [styles.inlineButton, pressed && styles.buttonPressed]}
-                  >
-                    <Ionicons name="checkmark" size={18} color={Palette.ink} />
-                    <Text style={styles.inlineButtonText}>Save with name</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => commitSave()}
-                    style={({ pressed }) => [styles.ghostButton, pressed && styles.buttonPressed]}
-                  >
-                    <Ionicons name="arrow-forward" size={18} color="#f8fafc" />
-                    <Text style={styles.ghostButtonText}>Skip naming</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => setShowSavePrompt(false)}
-                    style={({ pressed }) => [styles.cancelButton, pressed && styles.buttonPressed]}
-                  >
-                    <Ionicons name="close" size={18} color="#f8fafc" />
-                    <Text style={styles.cancelButtonText}>Cancel</Text>
-                  </Pressable>
-                </View>
-              </View>
-            ) : null}
           </View>
 
           <View style={styles.summaryPanel}>
@@ -579,6 +542,67 @@ export default function HomeScreen() {
             <Text style={styles.successText}>{lastSavedName} saved</Text>
           </View>
         ) : null}
+
+        <Modal
+          animationType="fade"
+          transparent
+          visible={showSavePrompt && !!pendingUri}
+          onRequestClose={() => setShowSavePrompt(false)}
+        >
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalSheet}>
+              <View style={styles.modalHeader}>
+                <View style={styles.modalIconBubble}>
+                  <Ionicons name="save-outline" size={20} color={Palette.ink} />
+                </View>
+                <Pressable
+                  onPress={() => setShowSavePrompt(false)}
+                  style={({ pressed }) => [styles.modalCloseButton, pressed && styles.buttonPressed]}
+                >
+                  <Ionicons name="close" size={18} color="#f8fafc" />
+                </Pressable>
+              </View>
+
+              <Text style={styles.namingTitle}>Name this recording?</Text>
+              <Text style={styles.namingText}>
+                Give it a custom name now, or skip and save with an automatic file name.
+              </Text>
+
+              <TextInput
+                value={draftName}
+                onChangeText={setDraftName}
+                placeholder="Optional recording name"
+                placeholderTextColor="#ffd8ef"
+                style={styles.nameInput}
+                autoFocus
+              />
+
+              <View style={styles.modalActions}>
+                <Pressable
+                  onPress={() => commitSave(draftName)}
+                  style={({ pressed }) => [styles.inlineButton, pressed && styles.buttonPressed]}
+                >
+                  <Ionicons name="checkmark" size={18} color={Palette.ink} />
+                  <Text style={styles.inlineButtonText}>Save with name</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => commitSave()}
+                  style={({ pressed }) => [styles.ghostButton, pressed && styles.buttonPressed]}
+                >
+                  <Ionicons name="arrow-forward" size={18} color="#f8fafc" />
+                  <Text style={styles.ghostButtonText}>Skip naming</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => setShowSavePrompt(false)}
+                  style={({ pressed }) => [styles.cancelButton, pressed && styles.buttonPressed]}
+                >
+                  <Ionicons name="close" size={18} color="#f8fafc" />
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </ScrollView>
     </ThemedView>
   );
@@ -782,11 +806,48 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   cancelButtonText: { color: "#f8fafc", fontWeight: "700" },
-  namingCard: {
-    borderRadius: 18,
-    padding: 16,
-    gap: 12,
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(10, 4, 12, 0.72)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+  modalSheet: {
+    width: "100%",
+    maxWidth: 420,
+    borderRadius: 24,
+    padding: 20,
+    gap: 14,
     backgroundColor: "#52194f",
+    borderWidth: 1,
+    borderColor: "#ff9cde",
+    shadowColor: "#000000",
+    shadowOpacity: 0.28,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 10,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  modalIconBubble: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: Palette.yellow,
+  },
+  modalCloseButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#6b1d57",
     borderWidth: 1,
     borderColor: "#ff9cde",
   },
@@ -801,7 +862,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     color: "#f8fafc",
   },
-  namingActions: { gap: 10 },
+  modalActions: { gap: 10 },
   metricCard: {
     borderRadius: 18,
     backgroundColor: "#341238",
