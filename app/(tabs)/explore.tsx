@@ -24,12 +24,6 @@ const cards = [
     body: "All stored files live in a dedicated tab with search, playback, rename, and delete controls.",
     color: Palette.coral,
   },
-  {
-    icon: "globe-outline" as const,
-    title: "Render web demo",
-    body: "The exported web build is ready for Render hosting. It showcases the UI, while recording still requires mobile.",
-    color: Palette.magenta,
-  },
 ];
 
 export default function ExploreScreen() {
@@ -57,14 +51,6 @@ export default function ExploreScreen() {
               <Text style={styles.cardBody}>{card.body}</Text>
             </View>
           ))}
-        </View>
-
-        <View style={styles.noteCard}>
-          <Ionicons name="people-outline" size={22} color={Palette.yellow} />
-          <Text style={styles.noteTitle}>Playful, not exclusionary</Text>
-          <Text style={styles.noteBody}>
-            The visuals can lean girly and still stay usable for men and everyone else. The goal is character, not gatekeeping.
-          </Text>
         </View>
       </ScrollView>
     </ThemedView>
@@ -136,23 +122,6 @@ const styles = StyleSheet.create({
   },
   cardBody: {
     color: "#ffe7f6",
-    lineHeight: 21,
-  },
-  noteCard: {
-    backgroundColor: "#52194f",
-    borderRadius: 22,
-    padding: 18,
-    gap: 10,
-    borderWidth: 1,
-    borderColor: "#ff9cde",
-  },
-  noteTitle: {
-    fontSize: 20,
-    fontWeight: "800",
-    fontFamily: Fonts.rounded,
-  },
-  noteBody: {
-    color: "#fff3b0",
     lineHeight: 21,
   },
 });
