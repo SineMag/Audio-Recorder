@@ -4,7 +4,8 @@
 
 Voice recorder with local, per-device storage (no cross-device sharing), playback, rename, delete, search, and per-file metadata. Recording is disabled on web (Expo limitation), but the web build can showcase the UI/list.
 
-Live site: add your Render URL here after deploy.
+### Live App
+[Audio Recorder](https://audio-recorder-pvok.onrender.com)
 
 ## Stack
 
