@@ -51,6 +51,7 @@ export default function HomeScreen() {
   const [lastSavedName, setLastSavedName] = useState<string | null>(null);
   const [showSavePrompt, setShowSavePrompt] = useState(false);
   const [draftName, setDraftName] = useState("");
+  const [showMicrophonePrompt, setShowMicrophonePrompt] = useState(false);
 
   const startTimeRef = useRef<number | null>(null);
   const previewUri = pendingUri ?? recordingUri;
@@ -152,6 +153,18 @@ export default function HomeScreen() {
         return;
       }
 
+      // Show microphone permission modal
+      setShowMicrophonePrompt(true);
+    } catch (error) {
+      console.log("Failed to start recording", error);
+      setError(getRecordingErrorMessage(error));
+    }
+  }
+
+  async function proceedWithRecording() {
+    setShowMicrophonePrompt(false);
+
+    try {
       // Request microphone permission
       const permission = await Audio.requestPermissionsAsync();
 
@@ -662,6 +675,62 @@ export default function HomeScreen() {
                 >
                   <Ionicons name="close" size={18} color="#f8fafc" />
                   <Text style={styles.cancelButtonText}>Cancel</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          animationType="fade"
+          transparent
+          visible={showMicrophonePrompt}
+          onRequestClose={() => setShowMicrophonePrompt(false)}
+        >
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalSheet}>
+              <View style={styles.modalHeader}>
+                <View style={styles.modalIconBubble}>
+                  <Ionicons name="mic" size={20} color={Palette.ink} />
+                </View>
+                <Pressable
+                  onPress={() => setShowMicrophonePrompt(false)}
+                  style={({ pressed }) => [
+                    styles.modalCloseButton,
+                    pressed && styles.buttonPressed,
+                  ]}
+                >
+                  <Ionicons name="close" size={18} color="#f8fafc" />
+                </Pressable>
+              </View>
+
+              <Text style={styles.namingTitle}>Allow microphone access?</Text>
+              <Text style={styles.namingText}>
+                This app needs permission to access your microphone so you can
+                record audio. We won't access your microphone without your
+                permission.
+              </Text>
+
+              <View style={styles.modalActions}>
+                <Pressable
+                  onPress={() => setShowMicrophonePrompt(false)}
+                  style={({ pressed }) => [
+                    styles.cancelButton,
+                    pressed && styles.buttonPressed,
+                  ]}
+                >
+                  <Ionicons name="close" size={18} color="#f8fafc" />
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                </Pressable>
+                <Pressable
+                  onPress={proceedWithRecording}
+                  style={({ pressed }) => [
+                    styles.inlineButton,
+                    pressed && styles.buttonPressed,
+                  ]}
+                >
+                  <Ionicons name="checkmark" size={18} color={Palette.ink} />
+                  <Text style={styles.inlineButtonText}>Allow</Text>
                 </Pressable>
               </View>
             </View>

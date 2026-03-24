@@ -7,20 +7,26 @@ import {
   formatMillis,
   formatModifiedDate,
   normalizeTimestamp,
-  RECORDINGS_DIR,
   RecordingItem,
+  RECORDINGS_DIR,
   sanitizeRecordingName,
 } from "@/constants/recordings";
 import { Colors, Fonts, Palette } from "@/constants/theme";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { Audio } from "expo-av";
-// eslint-disable-next-line import/no-unresolved
-import * as FileSystem from "expo-file-system/legacy";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import * as FileSystem from "expo-file-system";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
-  Alert,
+  Animated,
   FlatList,
+  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -31,7 +37,7 @@ import {
 
 function useRecordingsList(
   isWeb: boolean,
-  setError: (value: string | null) => void
+  setError: (value: string | null) => void,
 ) {
   const [items, setItems] = useState<RecordingItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -49,7 +55,9 @@ function useRecordingsList(
       await ensureRecordingsDir();
       const names = await FileSystem.readDirectoryAsync(RECORDINGS_DIR);
       const infos = await Promise.all(
-        names.map((name) => FileSystem.getInfoAsync(`${RECORDINGS_DIR}${name}`))
+        names.map((name) =>
+          FileSystem.getInfoAsync(`${RECORDINGS_DIR}${name}`),
+        ),
       );
 
       const recordings = names.map((name, index) => {
@@ -89,6 +97,11 @@ export default function PlayScreen() {
   const [renameUri, setRenameUri] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [showDeletePrompt, setShowDeletePrompt] = useState(false);
+  const [deleteItem, setDeleteItem] = useState<RecordingItem | null>(null);
+  const [deleteMessage, setDeleteMessage] = useState<string | null>(null);
+  const deleteMessageOpacity = useRef(new Animated.Value(0)).current;
+  const deleteMessageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { items, loading, loadList } = useRecordingsList(isWeb, setError);
 
@@ -125,8 +138,17 @@ export default function PlayScreen() {
       return () => {
         stopAndUnloadCurrent();
       };
-    }, [loadList, stopAndUnloadCurrent])
+    }, [loadList, stopAndUnloadCurrent]),
   );
+
+  // Cleanup animation timer on unmount
+  useEffect(() => {
+    return () => {
+      if (deleteMessageTimer.current) {
+        clearTimeout(deleteMessageTimer.current);
+      }
+    };
+  }, []);
 
   const filteredItems = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -166,11 +188,17 @@ export default function PlayScreen() {
             setIsPlaying(!!status.isPlaying);
           }
 
-          if ("positionMillis" in status && typeof status.positionMillis === "number") {
+          if (
+            "positionMillis" in status &&
+            typeof status.positionMillis === "number"
+          ) {
             setPlaybackPosition(status.positionMillis);
           }
 
-          if ("durationMillis" in status && typeof status.durationMillis === "number") {
+          if (
+            "durationMillis" in status &&
+            typeof status.durationMillis === "number"
+          ) {
             setPlaybackDuration(status.durationMillis);
           }
         });
@@ -185,42 +213,80 @@ export default function PlayScreen() {
         setError("Playback failed for this recording.");
       }
     },
-    [currentUri, isWeb, stopAndUnloadCurrent]
+    [currentUri, isWeb, stopAndUnloadCurrent],
   );
 
   const handleDelete = useCallback(
     (item: RecordingItem) => {
       if (isWeb) return;
-
-      Alert.alert("Delete recording", `Delete ${item.name}?`, [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              if (currentUri === item.uri) {
-                await stopAndUnloadCurrent();
-                setCurrentUri(null);
-              }
-
-              await FileSystem.deleteAsync(item.uri, { idempotent: true });
-
-              if (renameUri === item.uri) {
-                setRenameUri(null);
-                setRenameValue("");
-              }
-
-              await loadList();
-            } catch {
-              setError("Failed to delete that recording.");
-            }
-          },
-        },
-      ]);
+      setDeleteItem(item);
+      setShowDeletePrompt(true);
     },
-    [currentUri, isWeb, loadList, renameUri, stopAndUnloadCurrent]
+    [isWeb],
   );
+
+  const proceedWithDelete = useCallback(async () => {
+    if (!deleteItem) return;
+
+    setShowDeletePrompt(false);
+
+    try {
+      if (currentUri === deleteItem.uri) {
+        await stopAndUnloadCurrent();
+        setCurrentUri(null);
+      }
+
+      const deletedName = deleteItem.name;
+      await FileSystem.deleteAsync(deleteItem.uri, { idempotent: true });
+
+      if (renameUri === deleteItem.uri) {
+        setRenameUri(null);
+        setRenameValue("");
+      }
+
+      setDeleteItem(null);
+      await loadList();
+
+      // Show snackbar with smooth animation
+      setDeleteMessage(`${deletedName} deleted`);
+      deleteMessageOpacity.setValue(0);
+
+      Animated.sequence([
+        Animated.timing(deleteMessageOpacity, {
+          toValue: 1,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+        Animated.delay(2500),
+        Animated.timing(deleteMessageOpacity, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+      ]).start(() => {
+        setDeleteMessage(null);
+      });
+
+      // Clear any existing timer
+      if (deleteMessageTimer.current) {
+        clearTimeout(deleteMessageTimer.current);
+      }
+
+      // Fallback timer to ensure message clears
+      deleteMessageTimer.current = setTimeout(() => {
+        setDeleteMessage(null);
+      }, 3200);
+    } catch {
+      setError("Failed to delete that recording.");
+    }
+  }, [
+    deleteItem,
+    currentUri,
+    stopAndUnloadCurrent,
+    renameUri,
+    loadList,
+    deleteMessageOpacity,
+  ]);
 
   const startRename = useCallback((item: RecordingItem) => {
     setRenameUri(item.uri);
@@ -287,17 +353,22 @@ export default function PlayScreen() {
       const isRenaming = renameUri === item.uri;
 
       return (
-        <View style={[styles.recordingCard, isWide && styles.recordingCardWide]}>
+        <View
+          style={[styles.recordingCard, isWide && styles.recordingCardWide]}
+        >
           <View style={styles.recordingHeader}>
             <View style={styles.recordingCopy}>
               <Text style={styles.recordingName}>{item.name}</Text>
               <Text style={styles.recordingMeta}>
-                {formatFileSize(item.size)} | {formatModifiedDate(item.modified)}
+                {formatFileSize(item.size)} |{" "}
+                {formatModifiedDate(item.modified)}
               </Text>
               {isCurrent ? (
                 <Text style={styles.progressText}>
                   {formatMillis(playbackPosition)}
-                  {playbackDuration ? ` / ${formatMillis(playbackDuration)}` : ""}
+                  {playbackDuration
+                    ? ` / ${formatMillis(playbackDuration)}`
+                    : ""}
                 </Text>
               ) : null}
             </View>
@@ -342,7 +413,12 @@ export default function PlayScreen() {
             </View>
           ) : null}
 
-          <View style={[styles.recordingActions, isTablet && styles.recordingActionsWide]}>
+          <View
+            style={[
+              styles.recordingActions,
+              isTablet && styles.recordingActionsWide,
+            ]}
+          >
             <Pressable
               onPress={() => handlePlay(item)}
               style={({ pressed }) => [
@@ -399,7 +475,7 @@ export default function PlayScreen() {
       renameValue,
       startRename,
       submitRename,
-    ]
+    ],
   );
 
   if (isWeb) {
@@ -407,16 +483,22 @@ export default function PlayScreen() {
       <ThemedView style={styles.container}>
         <View style={[styles.webCard, isWide && styles.webCardWide]}>
           <Text style={styles.webEyebrow}>Render-ready web demo</Text>
-          <Text style={styles.webTitle}>The web build is for showcasing the UI</Text>
+          <Text style={styles.webTitle}>
+            The web build is for showcasing the UI
+          </Text>
           <Text style={styles.webText}>
-            Expo web can host the library and recording interface, but live microphone
-            capture for this app still needs Android or iOS. Render is still useful for
-            shipping a public demo link.
+            Expo web can host the library and recording interface, but live
+            microphone capture for this app still needs Android or iOS. Render
+            is still useful for shipping a public demo link.
           </Text>
           <View style={styles.webBullets}>
             <Text style={styles.webBullet}>Static export goes to `dist/`.</Text>
-            <Text style={styles.webBullet}>Use a Render static site with a rewrite to `index.html`.</Text>
-            <Text style={styles.webBullet}>Add your final Render URL to the README after deploy.</Text>
+            <Text style={styles.webBullet}>
+              Use a Render static site with a rewrite to `index.html`.
+            </Text>
+            <Text style={styles.webBullet}>
+              Add your final Render URL to the README after deploy.
+            </Text>
           </View>
         </View>
       </ThemedView>
@@ -431,7 +513,10 @@ export default function PlayScreen() {
         renderItem={renderRecording}
         refreshing={loading}
         onRefresh={loadList}
-        contentContainerStyle={[styles.listContent, isWide && styles.listContentWide]}
+        contentContainerStyle={[
+          styles.listContent,
+          isWide && styles.listContentWide,
+        ]}
         ListHeaderComponent={
           <View style={styles.heroCard}>
             <Text style={styles.eyebrow}>Saved recordings</Text>
@@ -442,13 +527,25 @@ export default function PlayScreen() {
 
             <View style={styles.heroIcons}>
               <View style={styles.heroIconBubble}>
-                <Ionicons name="headset-outline" size={18} color={Palette.magenta} />
+                <Ionicons
+                  name="headset-outline"
+                  size={18}
+                  color={Palette.magenta}
+                />
               </View>
               <View style={styles.heroIconBubble}>
-                <Ionicons name="sparkles-outline" size={18} color={Palette.yellow} />
+                <Ionicons
+                  name="sparkles-outline"
+                  size={18}
+                  color={Palette.yellow}
+                />
               </View>
               <View style={styles.heroIconBubble}>
-                <Ionicons name="people-outline" size={18} color={Palette.coral} />
+                <Ionicons
+                  name="people-outline"
+                  size={18}
+                  color={Palette.coral}
+                />
               </View>
             </View>
 
@@ -471,7 +568,9 @@ export default function PlayScreen() {
             <View style={styles.summaryRow}>
               <Text style={styles.summaryText}>{summaryText}</Text>
               <View style={styles.summaryBadge}>
-                <Text style={styles.summaryBadgeText}>{items.length} total</Text>
+                <Text style={styles.summaryBadgeText}>
+                  {items.length} total
+                </Text>
               </View>
             </View>
 
@@ -487,7 +586,9 @@ export default function PlayScreen() {
           <View style={[styles.emptyCard, isWide && styles.emptyCardWide]}>
             <Ionicons name="mic-off-outline" size={28} color="#7dd3fc" />
             <Text style={styles.emptyTitle}>
-              {search.trim() ? "No matching recordings" : "No saved recordings yet"}
+              {search.trim()
+                ? "No matching recordings"
+                : "No saved recordings yet"}
             </Text>
             <Text style={styles.emptyText}>
               {search.trim()
@@ -497,6 +598,75 @@ export default function PlayScreen() {
           </View>
         }
       />
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={showDeletePrompt && !!deleteItem}
+        onRequestClose={() => setShowDeletePrompt(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <View style={styles.modalIconBubble}>
+                <Ionicons name="trash" size={20} color={Palette.ink} />
+              </View>
+              <Pressable
+                onPress={() => setShowDeletePrompt(false)}
+                style={({ pressed }) => [
+                  styles.modalCloseButton,
+                  pressed && styles.buttonPressed,
+                ]}
+              >
+                <Ionicons name="close" size={18} color="#f8fafc" />
+              </Pressable>
+            </View>
+
+            <Text style={styles.namingTitle}>Delete {deleteItem?.name}?</Text>
+            <Text style={styles.namingText}>
+              This action cannot be undone. The recording will be permanently
+              deleted from your device.
+            </Text>
+
+            <View style={styles.modalActions}>
+              <Pressable
+                onPress={() => setShowDeletePrompt(false)}
+                style={({ pressed }) => [
+                  styles.cancelButton,
+                  pressed && styles.buttonPressed,
+                ]}
+              >
+                <Ionicons name="close" size={18} color="#f8fafc" />
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={proceedWithDelete}
+                style={({ pressed }) => [
+                  styles.deleteButton,
+                  pressed && styles.buttonPressed,
+                ]}
+              >
+                <Ionicons name="trash" size={18} color="#f8fafc" />
+                <Text style={styles.deleteButtonText}>Delete</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {deleteMessage ? (
+        <Animated.View
+          style={[
+            styles.deleteSnackbar,
+            {
+              opacity: deleteMessageOpacity,
+            },
+          ]}
+        >
+          <Ionicons name="checkmark-circle" size={18} color="#34d399" />
+          <Text style={styles.deleteSnackbarText}>{deleteMessage}</Text>
+        </Animated.View>
+      ) : null}
     </ThemedView>
   );
 }
@@ -704,5 +874,101 @@ const styles = StyleSheet.create({
   webText: { color: "#ffe7f6", lineHeight: 22 },
   webBullets: { gap: 8, marginTop: 4 },
   webBullet: { color: "#fff3b0" },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(10, 4, 12, 0.72)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+  modalSheet: {
+    width: "100%",
+    maxWidth: 420,
+    borderRadius: 24,
+    padding: 20,
+    gap: 14,
+    backgroundColor: "#52194f",
+    borderWidth: 1,
+    borderColor: "#ff9cde",
+    shadowColor: "#000000",
+    shadowOpacity: 0.28,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 10,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  modalIconBubble: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: Palette.yellow,
+  },
+  modalCloseButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#6b1d57",
+    borderWidth: 1,
+    borderColor: "#ff9cde",
+  },
+  namingTitle: { fontSize: 18, fontWeight: "800" },
+  namingText: { color: "#ffe7f6", lineHeight: 20 },
+  modalActions: { gap: 10, flexDirection: "row" },
+  cancelButton: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 16,
+    backgroundColor: "#431542",
+    borderWidth: 1,
+    borderColor: "#b76aa2",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  cancelButtonText: { color: "#f8fafc", fontWeight: "700" },
+  deleteButton: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 16,
+    backgroundColor: Palette.coral,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  deleteButtonText: { color: Palette.ink, fontWeight: "800" },
+  deleteSnackbar: {
+    position: "absolute",
+    bottom: 32,
+    alignSelf: "center",
+    minHeight: 50,
+    borderRadius: 14,
+    backgroundColor: "rgba(52, 211, 153, 0.95)",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    shadowColor: "#000000",
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 5,
+  },
+  deleteSnackbarText: { color: "#082f2f", fontWeight: "700", fontSize: 14 },
   buttonPressed: { opacity: 0.82 },
 });
