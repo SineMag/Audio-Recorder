@@ -12,8 +12,7 @@ import {
 import { Colors, Fonts, Palette } from "@/constants/theme";
 import { Ionicons } from "@expo/vector-icons";
 import { Audio } from "expo-av";
-// eslint-disable-next-line import/no-unresolved
-import * as FileSystem from "expo-file-system/legacy";
+import * as FileSystem from "expo-file-system";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Modal,
@@ -145,20 +144,21 @@ export default function HomeScreen() {
 
     try {
       if (isWeb) {
-        setError("Recording is not supported on web. Use Android or iOS.");
+        // For web, you can implement MediaRecorder API as an alternative
+        // For now, inform user to use native app
+        setError(
+          "For best experience, use Expo Go app on mobile or build native apps with EAS.",
+        );
         return;
       }
 
-      const current = await Audio.getPermissionsAsync();
-      let status = current.status;
+      // Request microphone permission
+      const permission = await Audio.requestPermissionsAsync();
 
-      if (status !== "granted") {
-        const request = await Audio.requestPermissionsAsync();
-        status = request.status;
-      }
-
-      if (status !== "granted") {
-        setError("Microphone permission is required to record audio.");
+      if (permission.status !== "granted") {
+        setError(
+          "Microphone permission is required to record audio. Please enable it in your device settings.",
+        );
         return;
       }
 
@@ -175,7 +175,7 @@ export default function HomeScreen() {
 
       const nextRecording = new Audio.Recording();
       await nextRecording.prepareToRecordAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
+        Audio.RecordingOptionsPresets.HIGH_QUALITY,
       );
       await nextRecording.startAsync();
 
@@ -267,10 +267,16 @@ export default function HomeScreen() {
         } else {
           setIsPlaying(!!status.isPlaying);
         }
-        if ("positionMillis" in status && typeof status.positionMillis === "number") {
+        if (
+          "positionMillis" in status &&
+          typeof status.positionMillis === "number"
+        ) {
           setPlaybackPosition(status.positionMillis);
         }
-        if ("durationMillis" in status && typeof status.durationMillis === "number") {
+        if (
+          "durationMillis" in status &&
+          typeof status.durationMillis === "number"
+        ) {
           setPlaybackDuration(status.durationMillis);
         }
       });
@@ -322,7 +328,9 @@ export default function HomeScreen() {
 
       const ext = extractExtension(pendingUri);
       const cleaned = sanitizeRecordingName(customName?.trim() ?? "");
-      const fileName = cleaned ? `${cleaned}.${ext}` : `rec_${Date.now()}.${ext}`;
+      const fileName = cleaned
+        ? `${cleaned}.${ext}`
+        : `rec_${Date.now()}.${ext}`;
       const destination = `${RECORDINGS_DIR}${fileName}`;
       const existing = await FileSystem.getInfoAsync(destination);
 
@@ -356,7 +364,9 @@ export default function HomeScreen() {
 
   return (
     <ThemedView style={styles.container}>
-      <ScrollView contentContainerStyle={[styles.content, isWide && styles.contentWide]}>
+      <ScrollView
+        contentContainerStyle={[styles.content, isWide && styles.contentWide]}
+      >
         <View style={styles.topBlock}>
           <View style={styles.topHeader}>
             <View>
@@ -367,7 +377,9 @@ export default function HomeScreen() {
               <View
                 style={[
                   styles.statusDot,
-                  isRecording && !isPaused ? styles.statusDotLive : styles.statusDotIdle,
+                  isRecording && !isPaused
+                    ? styles.statusDotLive
+                    : styles.statusDotIdle,
                 ]}
               />
               <Text style={styles.statusPillText}>{statusText}</Text>
@@ -381,7 +393,12 @@ export default function HomeScreen() {
             </Text>
           </View>
 
-          <View style={[styles.primaryActions, isTablet && styles.primaryActionsWide]}>
+          <View
+            style={[
+              styles.primaryActions,
+              isTablet && styles.primaryActionsWide,
+            ]}
+          >
             {!isRecording ? (
               <Pressable
                 onPress={startRecording}
@@ -429,7 +446,9 @@ export default function HomeScreen() {
 
           {isRecording ? (
             <View style={styles.liveIndicator}>
-              <View style={[styles.livePulse, isPaused && styles.livePulsePaused]} />
+              <View
+                style={[styles.livePulse, isPaused && styles.livePulsePaused]}
+              />
               <Text style={styles.liveText}>
                 {isPaused ? "Recording paused" : "Recording in progress"}
               </Text>
@@ -446,12 +465,18 @@ export default function HomeScreen() {
                   {pendingUri
                     ? "Listen back, then save with a custom name or skip naming."
                     : recordingUri
-                    ? "Your latest saved file is still available here."
-                    : "Your next take will appear here once you stop recording."}
+                      ? "Your latest saved file is still available here."
+                      : "Your next take will appear here once you stop recording."}
                 </Text>
               </View>
               <Ionicons
-                name={pendingUri ? "radio" : recordingUri ? "save" : "musical-notes-outline"}
+                name={
+                  pendingUri
+                    ? "radio"
+                    : recordingUri
+                      ? "save"
+                      : "musical-notes-outline"
+                }
                 size={24}
                 color={Palette.yellow}
               />
@@ -459,21 +484,38 @@ export default function HomeScreen() {
 
             <View style={[styles.infoChips, isTablet && styles.infoChipsWide]}>
               <View style={styles.infoChip}>
-                <Ionicons name="time-outline" size={16} color={Palette.yellow} />
+                <Ionicons
+                  name="time-outline"
+                  size={16}
+                  color={Palette.yellow}
+                />
                 <Text style={styles.infoChipText}>
                   {formatMillis(playbackPosition)}
-                  {playbackDuration ? ` / ${formatMillis(playbackDuration)}` : ""}
+                  {playbackDuration
+                    ? ` / ${formatMillis(playbackDuration)}`
+                    : ""}
                 </Text>
               </View>
               <View style={styles.infoChip}>
-                <Ionicons name="document-outline" size={16} color={Palette.pink} />
+                <Ionicons
+                  name="document-outline"
+                  size={16}
+                  color={Palette.pink}
+                />
                 <Text style={styles.infoChipText}>
-                  {previewMeta ? formatFileSize(previewMeta.size) : "No file yet"}
+                  {previewMeta
+                    ? formatFileSize(previewMeta.size)
+                    : "No file yet"}
                 </Text>
               </View>
             </View>
 
-            <View style={[styles.previewActions, isTablet && styles.previewActionsWide]}>
+            <View
+              style={[
+                styles.previewActions,
+                isTablet && styles.previewActionsWide,
+              ]}
+            >
               <Pressable
                 disabled={!previewUri}
                 onPress={togglePlayback}
@@ -483,7 +525,11 @@ export default function HomeScreen() {
                   pressed && previewUri ? styles.buttonPressed : null,
                 ]}
               >
-                <Ionicons name={isPlaying ? "pause" : "play"} size={18} color={Palette.ink} />
+                <Ionicons
+                  name={isPlaying ? "pause" : "play"}
+                  size={18}
+                  color={Palette.ink}
+                />
                 <Text style={styles.inlineButtonText}>
                   {isPlaying ? "Pause preview" : "Play preview"}
                 </Text>
@@ -508,7 +554,9 @@ export default function HomeScreen() {
                 style={({ pressed }) => [
                   styles.ghostButton,
                   !pendingUri && !recordingUri && styles.inlineButtonDisabled,
-                  pressed && (pendingUri || recordingUri) ? styles.buttonPressed : null,
+                  pressed && (pendingUri || recordingUri)
+                    ? styles.buttonPressed
+                    : null,
                 ]}
               >
                 <Ionicons name="trash-outline" size={18} color="#f8fafc" />
@@ -517,12 +565,15 @@ export default function HomeScreen() {
                 </Text>
               </Pressable>
             </View>
-
           </View>
 
           <View style={styles.summaryPanel}>
             <View style={styles.metricCard}>
-              <Ionicons name="phone-portrait-outline" size={18} color={Palette.yellow} />
+              <Ionicons
+                name="phone-portrait-outline"
+                size={18}
+                color={Palette.yellow}
+              />
               <Text style={styles.metricLabel}>Storage</Text>
               <Text style={styles.metricValue}>Saved on this device only</Text>
             </View>
@@ -557,7 +608,10 @@ export default function HomeScreen() {
                 </View>
                 <Pressable
                   onPress={() => setShowSavePrompt(false)}
-                  style={({ pressed }) => [styles.modalCloseButton, pressed && styles.buttonPressed]}
+                  style={({ pressed }) => [
+                    styles.modalCloseButton,
+                    pressed && styles.buttonPressed,
+                  ]}
                 >
                   <Ionicons name="close" size={18} color="#f8fafc" />
                 </Pressable>
@@ -565,7 +619,8 @@ export default function HomeScreen() {
 
               <Text style={styles.namingTitle}>Name this recording?</Text>
               <Text style={styles.namingText}>
-                Give it a custom name now, or skip and save with an automatic file name.
+                Give it a custom name now, or skip and save with an automatic
+                file name.
               </Text>
 
               <TextInput
@@ -580,21 +635,30 @@ export default function HomeScreen() {
               <View style={styles.modalActions}>
                 <Pressable
                   onPress={() => commitSave(draftName)}
-                  style={({ pressed }) => [styles.inlineButton, pressed && styles.buttonPressed]}
+                  style={({ pressed }) => [
+                    styles.inlineButton,
+                    pressed && styles.buttonPressed,
+                  ]}
                 >
                   <Ionicons name="checkmark" size={18} color={Palette.ink} />
                   <Text style={styles.inlineButtonText}>Save with name</Text>
                 </Pressable>
                 <Pressable
                   onPress={() => commitSave()}
-                  style={({ pressed }) => [styles.ghostButton, pressed && styles.buttonPressed]}
+                  style={({ pressed }) => [
+                    styles.ghostButton,
+                    pressed && styles.buttonPressed,
+                  ]}
                 >
                   <Ionicons name="arrow-forward" size={18} color="#f8fafc" />
                   <Text style={styles.ghostButtonText}>Skip naming</Text>
                 </Pressable>
                 <Pressable
                   onPress={() => setShowSavePrompt(false)}
-                  style={({ pressed }) => [styles.cancelButton, pressed && styles.buttonPressed]}
+                  style={({ pressed }) => [
+                    styles.cancelButton,
+                    pressed && styles.buttonPressed,
+                  ]}
                 >
                   <Ionicons name="close" size={18} color="#f8fafc" />
                   <Text style={styles.cancelButtonText}>Cancel</Text>
